@@ -34,7 +34,7 @@ Do not restate what the code says, and do not narrate a change. Git history cove
 
 - One predictor in the extension at a time. Run comparisons offline over recorded traces, not behind
   flags in the extension.
-- Keep `src/predict.ts` pure (no DOM, no `chrome.*`) so traces can be replayed through it in Node.
+- Keep `src/baselines.ts` and `src/model.ts` pure (no DOM, no `chrome.*`) so traces can be replayed through them in Node.
 - Traces are geometry only. Never store URLs, page text, element contents or selectors.
 - Inference runs on the CPU in plain TypeScript. No WebGPU.
 
@@ -43,6 +43,7 @@ Do not restate what the code says, and do not narrate a change. Git history cove
 ```
 npm run typecheck
 npm run build
+npm test
 ```
 
-Add `npm test` (`node --test`) alongside the first pure module. Node 22.18+ runs `.ts` tests directly.
+Tests use `node --test`; Node 22.18+ runs `.ts` tests directly.

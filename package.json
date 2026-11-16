@@ -6,7 +6,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "test": "node --test test/*.test.ts"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.7",

@@ -5,13 +5,20 @@
     <title>beeline</title>
     <style>
       body { font: 13px system-ui, sans-serif; width: 220px; margin: 12px; }
-      label { display: flex; gap: 6px; margin-bottom: 8px; }
+      label { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
       #trace-count { color: #666; margin: 12px 0 8px; }
     </style>
   </head>
   <body>
     <label><input type="checkbox" id="overlay" /> Show predictions</label>
-    <label><input type="checkbox" id="logging" /> Record clicks</label>
+    <label><input type="checkbox" id="recording" /> Record clicks</label>
+    <label>
+      Device
+      <select id="device">
+        <option value="mouse">Mouse</option>
+        <option value="trackpad">Trackpad</option>
+      </select>
+    </label>
     <p id="trace-count"></p>
     <button id="export">Export</button>
     <button id="clear">Clear</button>

@@ -1,5 +1,4 @@
-// Content script: collects targets, tracks the cursor and draws the overlay.
-// Recording traces is milestone 3 (docs/prd.md).
+// Content script: collects targets, tracks the cursor, draws the overlay and records traces.
 
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
@@ -20,21 +19,27 @@ const TARGET_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
+// The visible targets and their viewport rectangles, at the same indexes.
+let targetElements: Element[] = [];
 let targetRects: DOMRect[] = [];
 let targetRectsStale = true;
 
 /**
  * Function to re-measure the visible targets' viewport rectangles, if they've been marked stale.
- * @returns Nothing; updates `targetRects`.
+ * @returns Nothing; updates `targetElements` and `targetRects`.
  */
 function refreshTargetRects(): void {
   if (!targetRectsStale) return;
   targetRectsStale = false;
+  targetElements = [];
   targetRects = [];
   for (const element of document.querySelectorAll(TARGET_SELECTOR)) {
     const rect = element.getBoundingClientRect();
     const onScreen = rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
-    if (onScreen && rect.width > 0 && rect.height > 0) targetRects.push(rect);
+    if (onScreen && rect.width > 0 && rect.height > 0) {
+      targetElements.push(element);
+      targetRects.push(rect);
+    }
   }
 }
 
@@ -107,40 +112,46 @@ function drawOverlay(canvas: HTMLCanvasElement, cursor: TimedPoint, predicted: {
   context.fill();
 }
 
-chrome.storage.local.get("overlay").then(({ overlay }) => setOverlayEnabled(overlay === true));
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === "local" && changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
-});
-
 // Pointer ----------
 
 const SAMPLE_WINDOW_MS = 1000;
 
-// Full-rate cursor samples from the last second, for recording.
-const pointerSamples: TimedPoint[] = [];
-// The latest pointermove, and one of those per animation frame that had movement, as Foresight sees them.
-let latestPointerMove: TimedPoint | undefined;
+// A full-rate cursor sample. `predictedX/Y` is Chrome's farthest predicted point (the sample itself when it
+// has none), and `foresightFrame` marks the one sample per animation frame that Foresight processes.
+type PointerSample = TimedPoint & { predictedX: number; predictedY: number; foresightFrame: boolean };
+
+// Cursor samples from the last second, for recording.
+const pointerSamples: PointerSample[] = [];
+// The samples Foresight has seen within its velocity window.
 const foresightFrameHistory: TimedPoint[] = [];
-let overlayFrameRequested = false;
+let pointerFrameRequested = false;
 
 addEventListener(
   "pointermove",
   (event) => {
     if (!event.isTrusted || event.pointerType !== "mouse") return;
-    // getCoalescedEvents is only exposed in secure contexts.
+    // getCoalescedEvents and getPredictedEvents are only exposed in secure contexts.
     for (const sample of isSecureContext ? event.getCoalescedEvents() : [event]) {
-      pointerSamples.push({ t: sample.timeStamp, x: sample.clientX, y: sample.clientY });
+      const { timeStamp: t, clientX: x, clientY: y } = sample;
+      pointerSamples.push({ t, x, y, predictedX: x, predictedY: y, foresightFrame: false });
+    }
+    const farthestPrediction = isSecureContext ? event.getPredictedEvents().at(-1) : undefined;
+    if (farthestPrediction) {
+      pointerSamples.at(-1)!.predictedX = farthestPrediction.clientX;
+      pointerSamples.at(-1)!.predictedY = farthestPrediction.clientY;
     }
     pointerSamples.splice(0, pointerSamples.findIndex((sample) => sample.t >= event.timeStamp - SAMPLE_WINDOW_MS));
-    latestPointerMove = { t: event.timeStamp, x: event.clientX, y: event.clientY };
 
-    // Like Foresight, process at most once per frame, and only on frames with movement.
-    if (!overlayCanvas || overlayFrameRequested) return;
-    overlayFrameRequested = true;
+    // Like Foresight, take the latest sample once per frame, and only on frames with movement.
+    if (pointerFrameRequested) return;
+    pointerFrameRequested = true;
     requestAnimationFrame(() => {
-      overlayFrameRequested = false;
-      const cursor = latestPointerMove!;
+      pointerFrameRequested = false;
+      const latestSample = pointerSamples.at(-1);
+      if (!latestSample) return; // cleared by a scroll
+      latestSample.foresightFrame = true;
       if (!overlayCanvas) return;
+      const cursor = { t: latestSample.t, x: latestSample.x, y: latestSample.y };
       foresightFrameHistory.push(cursor);
       while (cursor.t - foresightFrameHistory[0].t > FORESIGHT_VELOCITY_WINDOW_MS) foresightFrameHistory.shift();
       refreshTargetRects();
@@ -164,4 +175,60 @@ addEventListener(
 addEventListener("resize", () => {
   targetRectsStale = true;
   if (overlayCanvas) sizeOverlayCanvas(overlayCanvas);
+});
+
+// Recording ----------
+
+let recordingEnabled = true;
+let device = "mouse";
+
+/**
+ * Function to round a number to one decimal place, to keep stored traces small.
+ * @param value The number to round.
+ * @returns The rounded number.
+ */
+function roundToTenth(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+addEventListener(
+  "pointerdown",
+  (event) => {
+    if (!recordingEnabled || !event.isTrusted || event.pointerType !== "mouse" || event.button !== 0) return;
+    const clickedElement = (event.target as Element).closest(TARGET_SELECTOR);
+    if (!clickedElement) return;
+    refreshTargetRects();
+    const clicked = targetElements.indexOf(clickedElement);
+    if (clicked === -1) return;
+
+    const time = Date.now();
+    const trace = {
+      time,
+      device,
+      viewport: [innerWidth, innerHeight],
+      samples: pointerSamples.map((sample) =>
+        [sample.t - event.timeStamp, sample.x, sample.y, sample.predictedX, sample.predictedY]
+          .map(roundToTenth)
+          .concat(sample.foresightFrame ? 1 : 0),
+      ),
+      targets: targetRects.map((rect) => [rect.left, rect.top, rect.width, rect.height].map(roundToTenth)),
+      clicked,
+    };
+    chrome.storage.local.set({ [`trace:${time}:${Math.random().toString(36).slice(2, 8)}`]: trace });
+  },
+  { capture: true, passive: true },
+);
+
+// Settings ----------
+
+chrome.storage.local.get(["overlay", "recording", "device"]).then((settings) => {
+  setOverlayEnabled(settings.overlay === true);
+  recordingEnabled = settings.recording !== false;
+  device = (settings.device as string | undefined) ?? "mouse";
+});
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
+  if (changes.recording) recordingEnabled = changes.recording.newValue !== false;
+  if (changes.device) device = changes.device.newValue as string;
 });

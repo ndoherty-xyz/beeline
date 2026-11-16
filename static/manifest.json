@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "beeline",
+  "version": "0.0.1",
+  "description": "Predicts which element your cursor is heading for, and learns how you move.",
+  "permissions": ["storage", "unlimitedStorage"],
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

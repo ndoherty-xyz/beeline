@@ -195,11 +195,9 @@ addEventListener(
   "pointerdown",
   (event) => {
     if (!recordingEnabled || !event.isTrusted || event.pointerType !== "mouse" || event.button !== 0) return;
-    const clickedElement = (event.target as Element).closest(TARGET_SELECTOR);
-    if (!clickedElement) return;
     refreshTargetRects();
-    const clicked = targetElements.indexOf(clickedElement);
-    if (clicked === -1) return;
+    // -1 when the click hit no target, e.g. a near miss.
+    const clicked = targetElements.indexOf((event.target as Element).closest(TARGET_SELECTOR)!);
 
     const time = Date.now();
     const trace = {
@@ -213,6 +211,8 @@ addEventListener(
       ),
       targets: targetRects.map((rect) => [rect.left, rect.top, rect.width, rect.height].map(roundToTenth)),
       clicked,
+      // Separates clicks on clickable elements the selector misses from real misses, when `clicked` is -1.
+      pointerCursor: getComputedStyle(event.target as Element).cursor === "pointer",
     };
     chrome.storage.local.set({ [`trace:${time}:${Math.random().toString(36).slice(2, 8)}`]: trace });
   },

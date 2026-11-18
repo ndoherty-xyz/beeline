@@ -310,10 +310,13 @@ const targetIdByElement = new WeakMap<Element, number>();
 let nextTargetId = 0;
 const destinationIdByHref = new Map<string, number>();
 
-// How long after pointerup the outcome is observed.
+// How long after pointerup the selection, focus and mutation outcome is measured.
 const OUTCOME_WINDOW_MS = 300;
+// How long after pointerup the URL is watched, since client-side routes can be slow.
+const NAVIGATION_WINDOW_MS = 2000;
 
-// What follows a recorded pointerdown, observed until OUTCOME_WINDOW_MS after pointerup or pointercancel.
+// What follows a recorded pointerdown. Measured OUTCOME_WINDOW_MS after pointerup or pointercancel, and written once
+// the URL watch ends: on a navigation, NAVIGATION_WINDOW_MS after release, the next pointerdown, or pagehide.
 type PendingOutcome = {
   id: string;
   downTime: number;
@@ -323,10 +326,16 @@ type PendingOutcome = {
   up?: number[];
   cancelled?: boolean;
   clicked?: boolean;
+  // The click event's detail: 1 single, 2 double, and so on. Pointerdown's is always 0 in Chrome.
+  clickCount?: number;
+  navigatedMs?: number;
+  // The fields measured OUTCOME_WINDOW_MS after release.
+  measured?: Record<string, unknown>;
   activeElementBefore: Element | null;
   hrefBefore: string;
   mutationsBefore: number;
   timer?: ReturnType<typeof setTimeout>;
+  urlPoll: ReturnType<typeof setInterval>;
 };
 let pendingOutcome: PendingOutcome | undefined;
 
@@ -340,39 +349,68 @@ function roundToTenth(value: number): number {
 }
 
 /**
- * Function to store the pending outcome under its own key and stop observing it. When observation ended early,
- * only events that were seen are stored; the rest are left out, meaning unknown.
- * @param complete Whether the observation window finished.
- * @param pageHidden Whether the page is being left, which counts as a navigation.
+ * Function to write the pending outcome under its own key and stop observing it. Fields that weren't observed are
+ * left out, meaning unknown.
+ * @param watchEnd When the URL watch ended, on the `event.timeStamp` clock.
  * @returns Nothing.
  */
-function storePendingOutcome(complete: boolean, pageHidden = false): void {
-  const pending = pendingOutcome;
-  if (!pending) return;
+function storePendingOutcome(watchEnd: number): void {
+  const pending = pendingOutcome!;
   pendingOutcome = undefined;
   clearTimeout(pending.timer);
+  clearInterval(pending.urlPoll);
   const outcome: Record<string, unknown> = { id: pending.id, press: pending.press.map((sample) => sample.map(roundToTenth)) };
   if (pending.up) outcome.up = pending.up.map(roundToTenth);
   if (pending.cancelled !== undefined) outcome.cancelled = pending.cancelled;
-  if (complete) {
-    outcome.clicked = pending.clicked ?? false;
-    outcome.selection = !(getSelection()?.isCollapsed ?? true);
-    outcome.focusChanged = document.activeElement !== pending.activeElementBefore;
-    outcome.navigated = location.href !== pending.hrefBefore;
-    outcome.mutationsBefore = pending.mutationsBefore;
-    outcome.mutationsAfter = countMutations(pending.endTime!, pending.endTime! + OUTCOME_WINDOW_MS);
-  } else {
-    if (pending.clicked) outcome.clicked = true;
-    if (pageHidden) outcome.navigated = true;
-  }
+  if (pending.clicked) outcome.clicked = true;
+  if (pending.clickCount !== undefined) outcome.clickCount = pending.clickCount;
+  Object.assign(outcome, pending.measured);
+  if (pending.navigatedMs !== undefined) outcome.navigatedMs = pending.navigatedMs;
+  outcome.watchedMs = roundToTenth(watchEnd - pending.downTime);
   chrome.storage.local.set({ [`outcome:${pending.id}`]: outcome });
+}
+
+/**
+ * Function to check the pending outcome for a navigation, and write it once the URL watch is over.
+ * @param now The current time, on the `event.timeStamp` clock.
+ * @param stop Whether the watch ends now: the next pointerdown or pagehide.
+ * @param pageHidden Whether the page is being left, which counts as a navigation.
+ * @returns Nothing.
+ */
+function checkPendingNavigation(now: number, stop: boolean, pageHidden = false): void {
+  const pending = pendingOutcome;
+  if (!pending) return;
+  const deadline = pending.endTime === undefined ? Infinity : pending.endTime + NAVIGATION_WINDOW_MS;
+  // A change first seen after the deadline (a late timer, the next click) isn't attributed to this click.
+  if (now <= deadline && pending.navigatedMs === undefined && (pageHidden || location.href !== pending.hrefBefore)) {
+    pending.navigatedMs = roundToTenth(now - pending.downTime);
+  }
+  if (stop || (pending.measured && (pending.navigatedMs !== undefined || now >= deadline))) storePendingOutcome(Math.min(now, deadline));
+}
+
+/**
+ * Function to start the OUTCOME_WINDOW_MS timer after pointerup or pointercancel, which measures what the press did.
+ * @param pending The pending outcome, with `endTime` set.
+ * @returns Nothing.
+ */
+function scheduleOutcomeMeasurement(pending: PendingOutcome): void {
+  pending.timer = setTimeout(() => {
+    pending.measured = {
+      clicked: pending.clicked ?? false,
+      selection: !(getSelection()?.isCollapsed ?? true),
+      focusChanged: document.activeElement !== pending.activeElementBefore,
+      mutationsBefore: pending.mutationsBefore,
+      mutationsAfter: countMutations(pending.endTime!, pending.endTime! + OUTCOME_WINDOW_MS),
+    };
+    checkPendingNavigation(performance.now(), false);
+  }, OUTCOME_WINDOW_MS);
 }
 
 addEventListener(
   "pointerdown",
   (event) => {
     if (!recordingEnabled || !event.isTrusted || event.pointerType !== "mouse" || event.button !== 0) return;
-    storePendingOutcome(false);
+    checkPendingNavigation(event.timeStamp, true);
     refreshTargetRects();
     // -1 when the click hit no target, e.g. a near miss.
     const clicked = targetElements.indexOf((event.target as Element).closest(TARGET_SELECTOR)!);
@@ -422,7 +460,6 @@ addEventListener(
       dpr: devicePixelRatio,
       click: [event.clientX, event.clientY].map(roundToTenth),
       modifiers: (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0),
-      detail: event.detail,
       targetIds: targetElements.map((element) => {
         if (!targetIdByElement.has(element)) targetIdByElement.set(element, nextTargetId++);
         return targetIdByElement.get(element)!;
@@ -473,6 +510,7 @@ addEventListener(
       activeElementBefore: document.activeElement,
       hrefBefore: location.href,
       mutationsBefore: countMutations(event.timeStamp - OUTCOME_WINDOW_MS, event.timeStamp),
+      urlPoll: setInterval(() => checkPendingNavigation(performance.now(), false), 50),
     };
   },
   { capture: true, passive: true },
@@ -485,7 +523,7 @@ addEventListener(
     pendingOutcome.endTime = event.timeStamp;
     pendingOutcome.up = [event.timeStamp - pendingOutcome.downTime, event.clientX, event.clientY];
     pendingOutcome.cancelled = false;
-    pendingOutcome.timer = setTimeout(() => storePendingOutcome(true), OUTCOME_WINDOW_MS);
+    scheduleOutcomeMeasurement(pendingOutcome);
   },
   { capture: true, passive: true },
 );
@@ -496,7 +534,7 @@ addEventListener(
     if (!pendingOutcome || pendingOutcome.endTime !== undefined || event.pointerType !== "mouse") return;
     pendingOutcome.endTime = event.timeStamp;
     pendingOutcome.cancelled = true;
-    pendingOutcome.timer = setTimeout(() => storePendingOutcome(true), OUTCOME_WINDOW_MS);
+    scheduleOutcomeMeasurement(pendingOutcome);
   },
   { capture: true, passive: true },
 );
@@ -505,12 +543,15 @@ addEventListener(
 addEventListener(
   "click",
   (event) => {
-    if (pendingOutcome?.up && event.isTrusted && event.pointerType === "mouse" && event.button === 0) pendingOutcome.clicked = true;
+    if (pendingOutcome?.up && event.isTrusted && event.pointerType === "mouse" && event.button === 0) {
+      pendingOutcome.clicked = true;
+      pendingOutcome.clickCount = event.detail;
+    }
   },
   { capture: true, passive: true },
 );
 
-addEventListener("pagehide", () => storePendingOutcome(false, true));
+addEventListener("pagehide", () => checkPendingNavigation(performance.now(), true, true));
 
 // Settings ----------
 

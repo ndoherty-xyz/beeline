@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   findFirstFires,
+  findNearMisses,
   isAcquisition,
   replayChromePrediction,
   replayForesight,
   replayHover,
+  samplesSinceLastScroll,
   scorePredictor,
   type Trace,
 } from "../eval/replay.ts";
@@ -49,4 +51,49 @@ test("scorePredictor counts hits, every first fire, and lead times", () => {
 
 test("isAcquisition is false for a click that hit no target", () => {
   assert.equal(isAcquisition({ ...straightTrace, clicked: -1 }), false);
+});
+
+test("samplesSinceLastScroll keeps v1 samples and drops v2 samples up to the last scroll", () => {
+  assert.equal(samplesSinceLastScroll(straightTrace).length, 21);
+  const scrolled: Trace = {
+    ...straightTrace,
+    scrollers: [
+      { page: true, events: [[-200, 0, 10]] },
+      { page: false, events: [[-150, 0, 40]] },
+    ],
+  };
+  assert.deepEqual(
+    samplesSinceLastScroll(scrolled).map(([t]) => t),
+    [-140, -130, -120, -110, -100, -90, -80, -70, -60, -50],
+  );
+});
+
+// A miss 6 px above target 0, then a retry on the next click that hits it.
+const missTrace: Trace = {
+  ...straightTrace,
+  time: 1000,
+  clicked: -1,
+  version: 2,
+  id: "page1-3",
+  page: "page1",
+  seq: 3,
+  click: [200, 24],
+  targetIds: [7, 8, 9],
+};
+const retryTrace: Trace = { ...missTrace, time: 1400, clicked: 0, id: "page1-4", seq: 4, click: [200, 40] };
+
+test("findNearMisses pairs a miss with the next click on the same page", () => {
+  const { nearMisses, unmatchedRetries } = findNearMisses([missTrace, retryTrace]);
+  assert.equal(unmatchedRetries, 0);
+  assert.deepEqual(
+    nearMisses.map(({ target, dx, dy, distance }) => ({ target, dx, dy, distance })),
+    [{ target: 0, dx: 0, dy: -6, distance: 6 }],
+  );
+});
+
+test("findNearMisses skips retries on another page, too late, too far, or with an unknown target", () => {
+  assert.equal(findNearMisses([missTrace, { ...retryTrace, id: "page2-4", page: "page2" }]).nearMisses.length, 0);
+  assert.equal(findNearMisses([missTrace, { ...retryTrace, time: 2500 }]).nearMisses.length, 0);
+  assert.equal(findNearMisses([{ ...missTrace, click: [200, -50] }, retryTrace]).nearMisses.length, 0);
+  assert.deepEqual(findNearMisses([missTrace, { ...retryTrace, targetIds: [70, 8, 9] }]), { nearMisses: [], unmatchedRetries: 1 });
 });

@@ -8,6 +8,7 @@ reproduces.
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -34,6 +35,9 @@ def load_acquisitions(path):
     acquisitions = []
     for line in Path(path).read_text().splitlines():
         trace = json.loads(line)
+        # Only the samples after the last scroll (eval/replay.ts samplesSinceLastScroll), which is all v1 recorded.
+        last_scroll = max((event[0] for scroller in trace.get("scrollers", []) for event in scroller["events"]), default=-math.inf)
+        trace["samples"] = [sample for sample in trace["samples"] if sample[0] > last_scroll]
         if trace["clicked"] == -1 or not trace["samples"]:
             continue
         trace["samples"].sort(key=lambda sample: sample[0])

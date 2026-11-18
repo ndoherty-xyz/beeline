@@ -23,15 +23,15 @@ predictor fires on: the model (at a threshold you set, 80% by default) or Foresi
 A 544-parameter model trained on one person's trackpad clicks, scored offline on the newest 373 clicks it
 never saw, against [Foresight](https://foresightjs.com) and plain hover:
 
-| predictor | precision | median lead before the click | ms saved per click at 400 / 1000 ms fetch |
-|---|---|---|---|
-| hover | 28% | 361 ms | 304 / 421 |
-| foresight | 20% | 512 ms | 361 / 549 |
-| model, p ≥ 0.18 | 20% | 642 ms | 378 / 650 |
-| model, p ≥ 0.37 | 36% | 522 ms | 350 / 552 |
+| predictor | precision | wasted prefetches per click | median lead before the click | ms saved per click at 400 / 1000 ms fetch |
+|---|---|---|---|---|
+| hover | 28% | 2.5 | 361 ms | 304 / 421 |
+| foresight | 20% | 3.9 | 512 ms | 361 / 549 |
+| model, p ≥ 0.18 | 20% | 3.9 | 642 ms | 378 / 650 |
+| model, p ≥ 0.37 | 36% | 1.8 | 522 ms | 350 / 552 |
 
 - At Foresight's precision, the model fires 130 ms earlier.
-- At Foresight's lead, it's right 36% of the time instead of 20%, so it wastes half as many prefetches.
+- At Foresight's lead, it's right 36% of the time instead of 20%, so it wastes 1.8 prefetches per click instead of 3.9.
 - Its top guess is right 75% of the time 300 ms before the click.
 
 It's one person and one device so far. Details, and how fetch times and bandwidth are assumed, are in

@@ -1,6 +1,8 @@
 // Content script: collects targets, tracks the cursor, draws the overlay and records traces.
 
-import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
+import type { TimedPoint } from "./baselines.ts";
+import { predictTargetProbabilities } from "./model.ts";
+import modelWeights from "./model-weights.json";
 
 // Targets ----------
 
@@ -82,14 +84,18 @@ function setOverlayEnabled(enabled: boolean): void {
   }
 }
 
+// Below this a target isn't outlined, so a page of near-zero targets stays clean.
+const MIN_OUTLINED_PROBABILITY = 0.03;
+// At or above this a target also gets its percentage. Probabilities sum to 1, so at most one target qualifies.
+const MIN_LABELLED_PROBABILITY = 0.5;
+
 /**
- * Function to draw every target faintly, and Foresight's predicted line and the targets it crosses strongly.
+ * Function to draw every target faintly, outline each by the model's probability, and label the likeliest.
  * @param canvas The overlay canvas.
- * @param cursor The current cursor position.
- * @param predicted Foresight's predicted cursor position.
+ * @param targetProbabilities The model's probability for each target in `targetRects`.
  * @returns Nothing.
  */
-function drawOverlay(canvas: HTMLCanvasElement, cursor: TimedPoint, predicted: { x: number; y: number }): void {
+function drawOverlay(canvas: HTMLCanvasElement, targetProbabilities: number[]): void {
   const context = canvas.getContext("2d")!;
   context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   context.clearRect(0, 0, innerWidth, innerHeight);
@@ -98,18 +104,29 @@ function drawOverlay(canvas: HTMLCanvasElement, cursor: TimedPoint, predicted: {
   context.strokeStyle = "rgba(128, 128, 128, 0.5)";
   for (const rect of targetRects) context.strokeRect(rect.left, rect.top, rect.width, rect.height);
 
-  context.lineWidth = 2;
-  context.strokeStyle = context.fillStyle = "#f59e0b";
-  for (const rect of targetRects) {
-    if (segmentIntersectsRect(cursor, predicted, rect)) context.strokeRect(rect.left, rect.top, rect.width, rect.height);
-  }
-  context.beginPath();
-  context.moveTo(cursor.x, cursor.y);
-  context.lineTo(predicted.x, predicted.y);
-  context.stroke();
-  context.beginPath();
-  context.arc(predicted.x, predicted.y, 3, 0, 2 * Math.PI);
-  context.fill();
+  context.font = "600 11px ui-monospace, Menlo, monospace";
+  context.textBaseline = "middle";
+  targetProbabilities.forEach((probability, index) => {
+    if (probability < MIN_OUTLINED_PROBABILITY) return;
+    const rect = targetRects[index];
+    context.globalAlpha = 0.3 + 0.7 * probability;
+    context.lineWidth = 1 + 3 * probability;
+    context.strokeStyle = "#f59e0b";
+    context.strokeRect(rect.left, rect.top, rect.width, rect.height);
+    context.globalAlpha = 1;
+    if (probability < MIN_LABELLED_PROBABILITY) return;
+    // A pill above the target's top-right corner, kept inside the viewport.
+    const label = `${Math.round(probability * 100)}%`;
+    const labelWidth = context.measureText(label).width + 8;
+    const labelLeft = Math.max(0, Math.min(rect.right - labelWidth, innerWidth - labelWidth));
+    const labelTop = Math.max(0, rect.top - 18);
+    context.fillStyle = "#f59e0b";
+    context.beginPath();
+    context.roundRect(labelLeft, labelTop, labelWidth, 16, 4);
+    context.fill();
+    context.fillStyle = "#1c1917";
+    context.fillText(label, labelLeft + 4, labelTop + 8.5);
+  });
 }
 
 // Pointer ----------
@@ -120,10 +137,8 @@ const SAMPLE_WINDOW_MS = 1000;
 // has none), and `foresightFrame` marks the one sample per animation frame that Foresight processes.
 type PointerSample = TimedPoint & { predictedX: number; predictedY: number; foresightFrame: boolean };
 
-// Cursor samples from the last second, for recording.
+// Cursor samples from the last second, for recording and the model.
 const pointerSamples: PointerSample[] = [];
-// The samples Foresight has seen within its velocity window.
-const foresightFrameHistory: TimedPoint[] = [];
 let pointerFrameRequested = false;
 
 addEventListener(
@@ -151,11 +166,10 @@ addEventListener(
       if (!latestSample) return; // cleared by a scroll
       latestSample.foresightFrame = true;
       if (!overlayCanvas) return;
-      const cursor = { t: latestSample.t, x: latestSample.x, y: latestSample.y };
-      foresightFrameHistory.push(cursor);
-      while (cursor.t - foresightFrameHistory[0].t > FORESIGHT_VELOCITY_WINDOW_MS) foresightFrameHistory.shift();
       refreshTargetRects();
-      drawOverlay(overlayCanvas, cursor, predictForesightPoint(foresightFrameHistory));
+      if (targetRects.length === 0) return;
+      // Same frames and full-rate history as eval/replay.ts replayModel.
+      drawOverlay(overlayCanvas, predictTargetProbabilities(modelWeights, pointerSamples, targetRects));
     });
   },
   { capture: true, passive: true },

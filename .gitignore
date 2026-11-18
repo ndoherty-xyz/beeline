@@ -3,3 +3,7 @@ dist/
 .DS_Store
 *.jsonl
 data/
+.venv/
+__pycache__/
+# Trained on personal cursor movement.
+src/model-weights.json

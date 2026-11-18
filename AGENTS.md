@@ -50,3 +50,8 @@ npm test
 ```
 
 Tests use `node --test`; Node 22.18+ runs `.ts` tests directly.
+
+Training is Python (numpy, managed by uv in `train/`): `npm run train -- data/<export>.jsonl` rewrites
+`src/model-weights.json` (gitignored: it's fitted to personal movement, never commit it) and
+`test/model-fixture.json` (random weights, so the parity test needs no trained model) together. `train/beeline_model.py` mirrors
+`src/model.ts`; change both, then retrain so the fixture matches.

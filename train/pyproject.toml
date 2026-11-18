@@ -1,0 +1,6 @@
+[project]
+name = "beeline-train"
+version = "0.0.1"
+description = "Trains beeline's base model on recorded traces."
+requires-python = ">=3.13"
+dependencies = ["numpy>=2.2"]

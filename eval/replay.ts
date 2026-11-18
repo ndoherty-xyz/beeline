@@ -1,6 +1,7 @@
 // Offline replay: runs recorded traces through the baselines and scores them. Pure, so it runs in Node.
 
 import { predictForesightPoint, segmentIntersectsRect, type Rect, type TimedPoint } from "../src/baselines.ts";
+import { predictTargetProbabilities, type ModelWeights } from "../src/model.ts";
 
 /** One recorded click, as stored by the content script (see docs/prd.md, Recording traces). */
 export type Trace = {
@@ -115,6 +116,49 @@ export function scorePredictor(traces: Trace[], replay: (trace: Trace) => Predic
     if (clickedFire === undefined) continue;
     score.hits++;
     score.leadTimesMs.push(-clickedFire);
+  }
+  return score;
+}
+
+// Model ----------
+
+/** The model's probability for every target at one Foresight frame. */
+export type ModelFrame = { t: number; probabilities: number[] };
+
+/**
+ * Function to replay the model on the same frames Foresight processes, each seeing every sample up to it.
+ * @param trace The recorded click.
+ * @param weights The trained weights.
+ * @returns One set of probabilities per frame, oldest first.
+ */
+export function replayModel(trace: Trace, weights: ModelWeights): ModelFrame[] {
+  const history: TimedPoint[] = trace.samples.map(([t, x, y]) => ({ t, x, y }));
+  const targetRects = trace.targets.map(targetToRect);
+  return trace.samples.flatMap((sample, index) =>
+    sample[5] === 1 ? [{ t: sample[0], probabilities: predictTargetProbabilities(weights, history.slice(0, index + 1), targetRects) }] : [],
+  );
+}
+
+/**
+ * Function to score the model like a yes/no predictor: a target fires the first time its probability reaches the
+ * threshold.
+ * @param replays Each click with its model frames.
+ * @param threshold The probability that fires a target.
+ * @returns The model's totals at that threshold.
+ */
+export function scoreModelAtThreshold(replays: { trace: Trace; frames: ModelFrame[] }[], threshold: number): PredictorScore {
+  const score: PredictorScore = { clicks: replays.length, hits: 0, fires: 0, leadTimesMs: [] };
+  for (const { trace, frames } of replays) {
+    const fired = new Set<number>();
+    for (const { t, probabilities } of frames) {
+      probabilities.forEach((probability, target) => {
+        if (probability < threshold || fired.has(target)) return;
+        fired.add(target);
+        if (target === trace.clicked) score.leadTimesMs.push(-t);
+      });
+    }
+    score.fires += fired.size;
+    if (fired.has(trace.clicked)) score.hits++;
   }
   return score;
 }

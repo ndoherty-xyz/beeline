@@ -1,6 +1,6 @@
 // Content script: collects targets, tracks the cursor, draws the overlay and records traces.
 
-import type { TimedPoint } from "./baselines.ts";
+import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 import { predictTargetProbabilities } from "./model.ts";
 import modelWeights from "./model-weights.json";
 
@@ -84,49 +84,75 @@ function setOverlayEnabled(enabled: boolean): void {
   }
 }
 
-// Below this a target isn't outlined, so a page of near-zero targets stays clean.
-const MIN_OUTLINED_PROBABILITY = 0.03;
-// At or above this a target also gets its percentage. Probabilities sum to 1, so at most one target qualifies.
-const MIN_LABELLED_PROBABILITY = 0.5;
+// Set from the popup. Foresight fires yes or no, so the threshold only applies to the model.
+const overlaySettings = { predictor: "model", showAllTargets: false, thresholdPercent: 80 };
+// Below this, a target isn't tinted in all-targets mode.
+const MIN_TINTED_PROBABILITY = 0.03;
 
 /**
- * Function to draw every target faintly, outline each by the model's probability, and label the likeliest.
+ * Function to outline the targets that are firing, and in all-targets mode every other target faintly.
  * @param canvas The overlay canvas.
- * @param targetProbabilities The model's probability for each target in `targetRects`.
+ * @param targetProbabilities A probability for each target in `targetRects`; 1 or 0 for Foresight.
+ * @param minFiringProbability The probability at which a target counts as firing.
+ * @param foresightLine Foresight's predicted line, drawn when it's the predictor; model targets get a percentage instead.
  * @returns Nothing.
  */
-function drawOverlay(canvas: HTMLCanvasElement, targetProbabilities: number[]): void {
+function drawOverlay(
+  canvas: HTMLCanvasElement,
+  targetProbabilities: number[],
+  minFiringProbability: number,
+  foresightLine?: { from: TimedPoint; to: { x: number; y: number } },
+): void {
   const context = canvas.getContext("2d")!;
   context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   context.clearRect(0, 0, innerWidth, innerHeight);
+  context.strokeStyle = context.fillStyle = "#f59e0b";
 
-  context.lineWidth = 1;
-  context.strokeStyle = "rgba(128, 128, 128, 0.5)";
-  for (const rect of targetRects) context.strokeRect(rect.left, rect.top, rect.width, rect.height);
+  if (overlaySettings.showAllTargets) {
+    targetRects.forEach((rect, index) => {
+      const probability = targetProbabilities[index];
+      if (probability >= minFiringProbability) return;
+      // Grey, or amber that strengthens with the probability.
+      const tinted = probability >= MIN_TINTED_PROBABILITY;
+      context.globalAlpha = tinted ? 0.3 + 0.7 * probability : 1;
+      context.lineWidth = tinted ? 1 + 2 * probability : 1;
+      context.strokeStyle = tinted ? "#f59e0b" : "rgba(128, 128, 128, 0.5)";
+      context.strokeRect(rect.left, rect.top, rect.width, rect.height);
+    });
+    context.globalAlpha = 1;
+    context.strokeStyle = "#f59e0b";
+  }
 
   context.font = "600 11px ui-monospace, Menlo, monospace";
   context.textBaseline = "middle";
   targetProbabilities.forEach((probability, index) => {
-    if (probability < MIN_OUTLINED_PROBABILITY) return;
+    if (probability < minFiringProbability) return;
     const rect = targetRects[index];
-    context.globalAlpha = 0.3 + 0.7 * probability;
-    context.lineWidth = 1 + 3 * probability;
-    context.strokeStyle = "#f59e0b";
+    context.lineWidth = 2;
     context.strokeRect(rect.left, rect.top, rect.width, rect.height);
-    context.globalAlpha = 1;
-    if (probability < MIN_LABELLED_PROBABILITY) return;
+    if (foresightLine) return;
     // A pill above the target's top-right corner, kept inside the viewport.
     const label = `${Math.round(probability * 100)}%`;
     const labelWidth = context.measureText(label).width + 8;
     const labelLeft = Math.max(0, Math.min(rect.right - labelWidth, innerWidth - labelWidth));
     const labelTop = Math.max(0, rect.top - 18);
-    context.fillStyle = "#f59e0b";
     context.beginPath();
     context.roundRect(labelLeft, labelTop, labelWidth, 16, 4);
     context.fill();
     context.fillStyle = "#1c1917";
     context.fillText(label, labelLeft + 4, labelTop + 8.5);
+    context.fillStyle = "#f59e0b";
   });
+
+  if (!foresightLine) return;
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(foresightLine.from.x, foresightLine.from.y);
+  context.lineTo(foresightLine.to.x, foresightLine.to.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(foresightLine.to.x, foresightLine.to.y, 3, 0, 2 * Math.PI);
+  context.fill();
 }
 
 // Pointer ----------
@@ -139,6 +165,8 @@ type PointerSample = TimedPoint & { predictedX: number; predictedY: number; fore
 
 // Cursor samples from the last second, for recording and the model.
 const pointerSamples: PointerSample[] = [];
+// The frames Foresight has seen within its velocity window, for the Foresight overlay.
+const foresightFrameHistory: TimedPoint[] = [];
 let pointerFrameRequested = false;
 
 addEventListener(
@@ -168,8 +196,18 @@ addEventListener(
       if (!overlayCanvas) return;
       refreshTargetRects();
       if (targetRects.length === 0) return;
-      // Same frames and full-rate history as eval/replay.ts replayModel.
-      drawOverlay(overlayCanvas, predictTargetProbabilities(modelWeights, pointerSamples, targetRects));
+      if (overlaySettings.predictor === "foresight") {
+        const cursor = { t: latestSample.t, x: latestSample.x, y: latestSample.y };
+        foresightFrameHistory.push(cursor);
+        while (cursor.t - foresightFrameHistory[0].t > FORESIGHT_VELOCITY_WINDOW_MS) foresightFrameHistory.shift();
+        const predicted = predictForesightPoint(foresightFrameHistory);
+        const crossed = targetRects.map((rect) => (segmentIntersectsRect(cursor, predicted, rect) ? 1 : 0));
+        drawOverlay(overlayCanvas, crossed, 1, { from: cursor, to: predicted });
+      } else {
+        // Same frames and full-rate history as eval/replay.ts replayModel.
+        const probabilities = predictTargetProbabilities(modelWeights, pointerSamples, targetRects);
+        drawOverlay(overlayCanvas, probabilities, overlaySettings.thresholdPercent / 100);
+      }
     });
   },
   { capture: true, passive: true },
@@ -181,6 +219,7 @@ addEventListener(
   () => {
     targetRectsStale = true;
     pointerSamples.length = 0;
+    foresightFrameHistory.length = 0;
     overlayCanvas?.getContext("2d")!.clearRect(0, 0, innerWidth, innerHeight);
   },
   { capture: true, passive: true },
@@ -235,14 +274,20 @@ addEventListener(
 
 // Settings ----------
 
-chrome.storage.local.get(["overlay", "recording", "device"]).then((settings) => {
+chrome.storage.local.get(["overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
   setOverlayEnabled(settings.overlay === true);
+  overlaySettings.predictor = (settings.overlayPredictor as string | undefined) ?? "model";
+  overlaySettings.showAllTargets = settings.overlayTargets === "all";
+  overlaySettings.thresholdPercent = (settings.overlayThreshold as number | undefined) ?? 80;
   recordingEnabled = settings.recording !== false;
   device = (settings.device as string | undefined) ?? "mouse";
 });
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
+  if (changes.overlayPredictor) overlaySettings.predictor = changes.overlayPredictor.newValue as string;
+  if (changes.overlayTargets) overlaySettings.showAllTargets = changes.overlayTargets.newValue === "all";
+  if (changes.overlayThreshold) overlaySettings.thresholdPercent = changes.overlayThreshold.newValue as number;
   if (changes.recording) recordingEnabled = changes.recording.newValue !== false;
   if (changes.device) device = changes.device.newValue as string;
 });

@@ -35,8 +35,8 @@ Do not restate what the code says, and do not narrate a change. Git history cove
 
 ## Scope
 
-- One predictor in the extension at a time. Run comparisons offline over recorded traces, not behind
-  flags in the extension.
+- The overlay can switch between the model and Foresight, to compare how they feel in use. Numbers come only
+  from offline comparisons over recorded traces, never from the extension.
 - Keep `src/baselines.ts` and `src/model.ts` pure (no DOM, no `chrome.*`) so traces can be replayed through them in Node.
 - Traces are geometry only. Never store URLs, page text, element contents or selectors.
 - Inference runs on the CPU in plain TypeScript. No WebGPU.

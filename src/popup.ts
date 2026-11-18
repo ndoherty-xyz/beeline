@@ -59,12 +59,15 @@ async function getRecordKeys(): Promise<{ traceKeys: string[]; outcomeKeys: stri
 }
 
 /**
- * Function to show how many traces and outcomes are stored, so lost outcomes are visible.
+ * Function to show how many traces are stored and how many have an outcome, so lost outcomes are visible.
  * @returns Nothing.
  */
 async function showTraceCount(): Promise<void> {
   const { traceKeys, outcomeKeys } = await getRecordKeys();
-  traceCountText.textContent = `${traceKeys.length} ${traceKeys.length === 1 ? "trace" : "traces"} recorded, ${outcomeKeys.length} with outcomes`;
+  // Trace keys end in the trace id (v2); an outcome written after its trace was cleared doesn't count.
+  const traceKeySuffixes = new Set(traceKeys.map((key) => key.split(":")[2]));
+  const joinedOutcomeCount = outcomeKeys.filter((key) => traceKeySuffixes.has(key.slice("outcome:".length))).length;
+  traceCountText.textContent = `${traceKeys.length} ${traceKeys.length === 1 ? "trace" : "traces"} recorded, ${joinedOutcomeCount} with outcomes`;
 }
 
 showTraceCount();

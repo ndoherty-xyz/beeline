@@ -241,7 +241,8 @@ addEventListener(
 
 // Scroll events closer together than this belong to one burst.
 const SCROLL_BURST_GAP_MS = 200;
-// A wheel snapshot is the geometry before a burst only if the burst's first scroll event follows it this closely.
+// A wheel snapshot is the geometry before a burst only if the burst's first scroll event follows it this closely,
+// on one of the wheel target's ancestors.
 const WHEEL_SNAPSHOT_MAX_LEAD_MS = 100;
 
 // [timeStamp, scrollLeft, scrollTop] of each element that scrolled in the last second. The page is
@@ -259,7 +260,6 @@ addEventListener(
   "wheel",
   (event) => {
     if (!event.isTrusted || event.timeStamp - lastScrollTime < SCROLL_BURST_GAP_MS) return; // mid-burst
-    if (latestWheelSnapshot && event.timeStamp - latestWheelSnapshot.t < WHEEL_SNAPSHOT_MAX_LEAD_MS) return;
     refreshTargetRects();
     const scrollOffsets = new Map<Element, number[]>();
     for (let element = event.target as Element | null; element; element = element.parentElement) {
@@ -276,7 +276,8 @@ addEventListener(
     const scrolledElement = event.target === document ? document.scrollingElement! : (event.target as Element);
     if (event.timeStamp - lastScrollTime >= SCROLL_BURST_GAP_MS) {
       const snapshotLead = latestWheelSnapshot ? event.timeStamp - latestWheelSnapshot.t : Infinity;
-      burstWheelSnapshot = snapshotLead <= WHEEL_SNAPSHOT_MAX_LEAD_MS ? latestWheelSnapshot : undefined;
+      const snapshotMatches = snapshotLead <= WHEEL_SNAPSHOT_MAX_LEAD_MS && latestWheelSnapshot!.scrollOffsets.has(scrolledElement);
+      burstWheelSnapshot = snapshotMatches ? latestWheelSnapshot : undefined;
     }
     lastScrollTime = event.timeStamp;
     const scrollEvents = scrollEventsByElement.get(scrolledElement) ?? [];
@@ -500,11 +501,11 @@ addEventListener(
   { capture: true, passive: true },
 );
 
-// A click belongs to the pending press once its pointerup has been seen.
+// A mouse click belongs to the pending press once its pointerup has been seen. Keyboard clicks have no pointerType.
 addEventListener(
   "click",
   (event) => {
-    if (pendingOutcome?.up && event.isTrusted) pendingOutcome.clicked = true;
+    if (pendingOutcome?.up && event.isTrusted && event.pointerType === "mouse" && event.button === 0) pendingOutcome.clicked = true;
   },
   { capture: true, passive: true },
 );

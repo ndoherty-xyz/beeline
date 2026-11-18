@@ -9,6 +9,7 @@
     "typecheck": "tsc",
     "test": "node --test test/*.test.ts",
     "eval": "node eval/report.ts",
+    "near-misses": "node eval/near-misses.ts",
     "train": "uv run --project train train/train.py"
   },
   "devDependencies": {

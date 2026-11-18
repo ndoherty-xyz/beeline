@@ -50,29 +50,40 @@ deviceSelect.addEventListener("change", () => chrome.storage.local.set({ device:
 // Traces ----------
 
 /**
- * Function to list the stored trace keys, oldest first.
- * @returns The trace keys.
+ * Function to list the stored trace keys (oldest first) and outcome keys.
+ * @returns The trace keys and the outcome keys.
  */
-async function getTraceKeys(): Promise<string[]> {
-  return (await chrome.storage.local.getKeys()).filter((key) => key.startsWith("trace:")).sort();
+async function getRecordKeys(): Promise<{ traceKeys: string[]; outcomeKeys: string[] }> {
+  const keys = await chrome.storage.local.getKeys();
+  return { traceKeys: keys.filter((key) => key.startsWith("trace:")).sort(), outcomeKeys: keys.filter((key) => key.startsWith("outcome:")) };
 }
 
 /**
- * Function to show how many traces are stored.
+ * Function to show how many traces are stored and how many have an outcome, so lost outcomes are visible.
  * @returns Nothing.
  */
 async function showTraceCount(): Promise<void> {
-  const traceCount = (await getTraceKeys()).length;
-  traceCountText.textContent = `${traceCount} ${traceCount === 1 ? "trace" : "traces"} recorded`;
+  const { traceKeys, outcomeKeys } = await getRecordKeys();
+  // Trace keys end in the trace id (v2); an outcome written after its trace was cleared doesn't count.
+  const traceKeySuffixes = new Set(traceKeys.map((key) => key.split(":")[2]));
+  const joinedOutcomeCount = outcomeKeys.filter((key) => traceKeySuffixes.has(key.slice("outcome:".length))).length;
+  traceCountText.textContent = `${traceKeys.length} ${traceKeys.length === 1 ? "trace" : "traces"} recorded, ${joinedOutcomeCount} with outcomes`;
 }
 
 showTraceCount();
 chrome.storage.onChanged.addListener(showTraceCount);
 
+// Each outcome is joined into its trace as `outcome`; outcomes whose trace is gone are dropped.
 exportButton.addEventListener("click", async () => {
-  const traceKeys = await getTraceKeys();
-  const traces = await chrome.storage.local.get(traceKeys);
-  const jsonl = traceKeys.map((key) => `${JSON.stringify(traces[key])}\n`).join("");
+  const { traceKeys, outcomeKeys } = await getRecordKeys();
+  const records = await chrome.storage.local.get([...traceKeys, ...outcomeKeys]);
+  const jsonl = traceKeys
+    .map((key) => {
+      const trace = records[key] as { id?: string };
+      const outcome = trace.id === undefined ? undefined : records[`outcome:${trace.id}`];
+      return `${JSON.stringify(outcome ? { ...trace, outcome } : trace)}\n`;
+    })
+    .join("");
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([jsonl], { type: "application/jsonl" }));
   link.download = `beeline-traces-${new Date().toISOString().slice(0, 10)}.jsonl`;
@@ -85,6 +96,7 @@ clearButton.addEventListener("click", async () => {
     clearButton.textContent = "Click again to clear";
     return;
   }
-  await chrome.storage.local.remove(await getTraceKeys());
+  const { traceKeys, outcomeKeys } = await getRecordKeys();
+  await chrome.storage.local.remove([...traceKeys, ...outcomeKeys]);
   clearButton.textContent = "Clear";
 });

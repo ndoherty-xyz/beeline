@@ -8,6 +8,7 @@ import {
   isAcquisition,
   replayForesight,
   replayModel,
+  samplesSinceLastScroll,
   scoreModelAtThreshold,
   scorePredictor,
   type ModelFrame,
@@ -121,8 +122,8 @@ const allTraces: Trace[] = readFileSync(process.argv[2], "utf8")
   .trim()
   .split("\n")
   .map((line) => JSON.parse(line));
-// Coalesced samples occasionally arrive a few ms out of order.
-for (const trace of allTraces) trace.samples.sort((a, b) => a[0] - b[0]);
+// Coalesced samples occasionally arrive a few ms out of order. Predictors only see samples since the last scroll.
+for (const trace of allTraces) trace.samples = samplesSinceLastScroll(trace).sort((a, b) => a[0] - b[0]);
 const acquisitions = allTraces.filter(isAcquisition);
 
 console.log(`${allTraces.length} traces; ${acquisitions.length} where the cursor moved onto the clicked target.`);

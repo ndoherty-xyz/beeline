@@ -1,6 +1,9 @@
 # Working in this repo
 
-Start with [docs/prd.md](docs/prd.md): the concept, the design, and the milestones in order.
+Start with [docs/prd.md](docs/prd.md): the concept, the design, and the milestones in order. Then
+[docs/results.md](docs/results.md): what the recorded data looks like and the current numbers.
+
+Traces are exported from the popup as JSONL. The current export is in `data/` (gitignored, never commit it).
 
 ## Writing code
 

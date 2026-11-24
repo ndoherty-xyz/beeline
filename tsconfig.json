@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test", "eval"]
+  "include": ["packages/*/src", "test", "eval"]
 }

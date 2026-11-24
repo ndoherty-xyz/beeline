@@ -1,41 +1,17 @@
-// Content script: collects targets, tracks the cursor, draws the overlay and records traces.
+// Content script: draws the overlay from the beeline core (or Foresight), and records traces.
 
+import { createBeeline, TARGET_SELECTOR, type BeelineFrame } from "beeline";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
-import { predictTargetProbabilities } from "./model.ts";
-import { TARGET_SELECTOR } from "./targets.ts";
-import modelWeights from "./model-weights.json";
+import modelWeights from "beeline/model-weights.json";
 
-// Targets ----------
+const beeline = createBeeline({ weights: modelWeights });
 
-// The visible targets and their viewport rectangles, at the same indexes.
-let targetElements: Element[] = [];
-let targetRects: DOMRect[] = [];
-let targetRectsStale = true;
-
-/**
- * Function to re-measure the visible targets' viewport rectangles, if they've been marked stale.
- * @returns Nothing; updates `targetElements` and `targetRects`.
- */
-function refreshTargetRects(): void {
-  if (!targetRectsStale) return;
-  targetRectsStale = false;
-  targetElements = [];
-  targetRects = [];
-  for (const element of document.querySelectorAll(TARGET_SELECTOR)) {
-    const rect = element.getBoundingClientRect();
-    const onScreen = rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
-    if (onScreen && rect.width > 0 && rect.height > 0) {
-      targetElements.push(element);
-      targetRects.push(rect);
-    }
-  }
-}
+// Mutations ----------
 
 // [performance.now(), mutation record count] over the last second, to tell how busy the page is around a click.
 const mutationCounts: number[][] = [];
 
 new MutationObserver((records) => {
-  targetRectsStale = true;
   const now = performance.now();
   mutationCounts.push([now, records.length]);
   while (mutationCounts[0][0] < now - 1000) mutationCounts.shift();
@@ -58,6 +34,7 @@ function countMutations(from: number, to: number): number {
 // Overlay ----------
 
 let overlayCanvas: HTMLCanvasElement | undefined;
+let stopOverlayFrames: (() => void) | undefined;
 
 /**
  * Function to match the overlay canvas to the viewport size and device pixel ratio.
@@ -82,7 +59,9 @@ function setOverlayEnabled(enabled: boolean): void {
     overlayCanvas.style.cssText = "position:fixed;left:0;top:0;pointer-events:none;z-index:2147483647";
     sizeOverlayCanvas(overlayCanvas);
     document.documentElement.append(overlayCanvas);
+    stopOverlayFrames = beeline.onFrame(drawOverlayFrame);
   } else if (!enabled && overlayCanvas) {
+    stopOverlayFrames!();
     overlayCanvas.remove();
     overlayCanvas = undefined;
   }
@@ -96,13 +75,15 @@ const MIN_TINTED_PROBABILITY = 0.03;
 /**
  * Function to outline the targets that are firing, and in all-targets mode every other target faintly.
  * @param canvas The overlay canvas.
- * @param targetProbabilities A probability for each target in `targetRects`; 1 or 0 for Foresight.
+ * @param targetRects The visible targets.
+ * @param targetProbabilities A probability for each target; 1 or 0 for Foresight.
  * @param minFiringProbability The probability at which a target counts as firing.
  * @param foresightLine Foresight's predicted line, drawn when it's the predictor; model targets get a percentage instead.
  * @returns Nothing.
  */
 function drawOverlay(
   canvas: HTMLCanvasElement,
+  targetRects: DOMRect[],
   targetProbabilities: number[],
   minFiringProbability: number,
   foresightLine?: { from: TimedPoint; to: { x: number; y: number } },
@@ -168,14 +149,32 @@ const SAMPLE_WINDOW_MS = 1000;
 // `scrollX/Y` is the page's scroll offset at the time.
 type PointerSample = TimedPoint & { predictedX: number; predictedY: number; foresightFrame: boolean; scrollX: number; scrollY: number };
 
-// Cursor samples from the last second, for recording and the model. Scrolling doesn't clear them.
+// Cursor samples from the last second, for recording. Scrolling doesn't clear them.
 const pointerSamples: PointerSample[] = [];
 // The frames Foresight has seen within its velocity window, for the Foresight overlay.
 const foresightFrameHistory: TimedPoint[] = [];
 let pointerFrameRequested = false;
-// When the page or any element last scrolled. The overlay only uses samples after it, since the trajectory no
-// longer lines up with the targets once they move.
+// When the page or any element last scrolled.
 let lastScrollTime = -Infinity;
+
+/**
+ * Function to draw one frame of the overlay: the core's probabilities, or Foresight's line on the same frame.
+ * @param frame The core's frame.
+ * @returns Nothing.
+ */
+function drawOverlayFrame({ targetRects, probabilities, history }: BeelineFrame): void {
+  if (!overlayCanvas) return;
+  if (overlaySettings.predictor !== "foresight") {
+    drawOverlay(overlayCanvas, targetRects, probabilities, overlaySettings.thresholdPercent / 100);
+    return;
+  }
+  const cursor = history.at(-1)!;
+  foresightFrameHistory.push(cursor);
+  while (cursor.t - foresightFrameHistory[0].t > FORESIGHT_VELOCITY_WINDOW_MS) foresightFrameHistory.shift();
+  const predicted = predictForesightPoint(foresightFrameHistory);
+  const crossed = targetRects.map((rect) => (segmentIntersectsRect(cursor, predicted, rect) ? 1 : 0));
+  drawOverlay(overlayCanvas, targetRects, crossed, 1, { from: cursor, to: predicted });
+}
 
 addEventListener(
   "pointermove",
@@ -200,24 +199,7 @@ addEventListener(
     requestAnimationFrame(() => {
       pointerFrameRequested = false;
       const latestSample = pointerSamples.at(-1);
-      if (!latestSample || latestSample.t <= lastScrollTime) return; // no movement since the last scroll
-      latestSample.foresightFrame = true;
-      if (!overlayCanvas) return;
-      refreshTargetRects();
-      if (targetRects.length === 0) return;
-      if (overlaySettings.predictor === "foresight") {
-        const cursor = { t: latestSample.t, x: latestSample.x, y: latestSample.y };
-        foresightFrameHistory.push(cursor);
-        while (cursor.t - foresightFrameHistory[0].t > FORESIGHT_VELOCITY_WINDOW_MS) foresightFrameHistory.shift();
-        const predicted = predictForesightPoint(foresightFrameHistory);
-        const crossed = targetRects.map((rect) => (segmentIntersectsRect(cursor, predicted, rect) ? 1 : 0));
-        drawOverlay(overlayCanvas, crossed, 1, { from: cursor, to: predicted });
-      } else {
-        // Same frames and history as eval/replay.ts replayModel after samplesSinceLastScroll.
-        const samplesSinceScroll = pointerSamples.filter((sample) => sample.t > lastScrollTime);
-        const probabilities = predictTargetProbabilities(modelWeights, samplesSinceScroll, targetRects);
-        drawOverlay(overlayCanvas, probabilities, overlaySettings.thresholdPercent / 100);
-      }
+      if (latestSample && latestSample.t > lastScrollTime) latestSample.foresightFrame = true;
     });
   },
   { capture: true, passive: true },
@@ -246,7 +228,7 @@ addEventListener(
   "wheel",
   (event) => {
     if (!event.isTrusted || event.timeStamp - lastScrollTime < SCROLL_BURST_GAP_MS) return; // mid-burst
-    refreshTargetRects();
+    const { targetElements, targetRects } = beeline.measureTargets();
     const scrollOffsets = new Map<Element, number[]>();
     for (let element = event.target as Element | null; element; element = element.parentElement) {
       scrollOffsets.set(element, [element.scrollLeft, element.scrollTop]);
@@ -271,7 +253,6 @@ addEventListener(
     while (scrollEvents[0][0] < event.timeStamp - SAMPLE_WINDOW_MS) scrollEvents.shift();
     scrollEventsByElement.set(scrolledElement, scrollEvents);
 
-    targetRectsStale = true;
     foresightFrameHistory.length = 0;
     overlayCanvas?.getContext("2d")!.clearRect(0, 0, innerWidth, innerHeight);
   },
@@ -279,7 +260,6 @@ addEventListener(
 );
 
 addEventListener("resize", () => {
-  targetRectsStale = true;
   if (overlayCanvas) sizeOverlayCanvas(overlayCanvas);
 });
 
@@ -397,7 +377,7 @@ addEventListener(
   (event) => {
     if (!recordingEnabled || !event.isTrusted || event.pointerType !== "mouse" || event.button !== 0) return;
     checkPendingNavigation(event.timeStamp, true);
-    refreshTargetRects();
+    const { targetElements, targetRects } = beeline.measureTargets();
     // -1 when the click hit no target, e.g. a near miss.
     const clicked = targetElements.indexOf((event.target as Element).closest(TARGET_SELECTOR)!);
     const targetIndexByElement = new Map(targetElements.map((element, index) => [element, index]));

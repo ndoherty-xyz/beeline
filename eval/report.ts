@@ -1,8 +1,8 @@
 // Prints the baseline metrics for a JSONL export of traces, as markdown tables.
-// Usage: npm run eval -- <traces.jsonl> [weights.json, default src/model-weights.json]
+// Usage: npm run eval -- <traces.jsonl> [weights.json, default packages/beeline/src/model-weights.json]
 
 import { readFileSync } from "node:fs";
-import type { ModelWeights } from "../src/model.ts";
+import type { ModelWeights } from "../packages/beeline/src/model.ts";
 import {
   BASELINES,
   fetchKeysByDestination,
@@ -150,7 +150,7 @@ printBaselineTable("Large targets (5% or more)", acquisitions.filter((trace) => 
 
 // Model ----------
 
-const weights: ModelWeights = JSON.parse(readFileSync(process.argv[3] ?? new URL("../src/model-weights.json", import.meta.url), "utf8"));
+const weights: ModelWeights = JSON.parse(readFileSync(process.argv[3] ?? new URL("../packages/beeline/src/model-weights.json", import.meta.url), "utf8"));
 // The recorder's own clicks after training, or every click by a held-out person from another dataset.
 const isHeldOut = (trace: Trace) => trace.time > weights.trainedUntil || weights.heldOutPeople.includes(trace.person!);
 const heldOutReplays = acquisitions

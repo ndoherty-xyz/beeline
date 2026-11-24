@@ -5,7 +5,7 @@ import {
   segmentIntersectsRect,
   type Rect,
   type TimedPoint,
-} from "../src/baselines.ts";
+} from "../packages/extension/src/baselines.ts";
 import { lineSegmentIntersectsRect } from "./foresight-4.3.0/helpers/lineSegmentIntersectsRect.ts";
 import { createMouseHistory, predictNextMousePosition } from "./foresight-4.3.0/helpers/predictNextMousePosition.ts";
 

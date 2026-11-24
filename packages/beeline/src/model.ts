@@ -3,7 +3,11 @@
 // target's chance of being clicked within that time. Pure, so traces can be replayed through it in Node.
 // Trained in train/ (Python); train/beeline_model.py mirrors the features and scoring here exactly.
 
-import type { Rect, TimedPoint } from "./baselines.ts";
+/** A cursor position in client coordinates, with a `performance.now()` timestamp in ms. */
+export type TimedPoint = { t: number; x: number; y: number };
+
+/** A viewport rectangle. A `DOMRect` satisfies it. */
+export type Rect = { left: number; top: number; right: number; bottom: number };
 
 /** Trained weights, as exported by train/train.py. Feature standardisation is folded into the hidden layer. */
 export type ModelWeights = {

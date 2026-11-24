@@ -1,0 +1,14 @@
+{
+  "name": "beeline-extension",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Chrome extension that records click traces and draws beeline's predictions over the page.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "dependencies": {
+    "beeline": "*"
+  }
+}

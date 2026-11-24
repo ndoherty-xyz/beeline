@@ -5,7 +5,7 @@
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { chromium, type Page } from "playwright";
-import { TARGET_SELECTOR } from "../src/targets.ts";
+import { TARGET_SELECTOR } from "../packages/beeline/src/targets.ts";
 import type { Trace } from "./replay.ts";
 
 // The extension keeps about this much cursor history before a click.

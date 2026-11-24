@@ -1,6 +1,6 @@
 """Features and scoring for beeline's base model.
 
-Mirrors src/model.ts line for line; test/model.test.ts checks the two give the same scores on a fixture
+Mirrors packages/beeline/src/model.ts line for line; test/model.test.ts checks the two give the same scores on a fixture
 written by train.py.
 """
 
@@ -116,7 +116,7 @@ def compute_features(times, xs, ys, current, rects):
 
 
 def score_targets(weights, features):
-    """Score each row of features with exported weights (a dict as in src/model-weights.json)."""
+    """Score each row of features with exported weights (a dict as in packages/beeline/src/model-weights.json)."""
     hidden = np.maximum(0, features @ np.asarray(weights["hiddenWeights"]).T + np.asarray(weights["hiddenBiases"]))
     return hidden @ np.asarray(weights["outputWeights"])
 

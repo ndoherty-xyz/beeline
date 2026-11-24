@@ -1,0 +1,11 @@
+{
+  "name": "beeline",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Each element's chance of being clicked in the next moment, from how the cursor is moving.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./model-weights.json": "./src/model-weights.json"
+  }
+}

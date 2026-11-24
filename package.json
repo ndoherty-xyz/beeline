@@ -10,12 +10,14 @@
     "test": "node --test test/*.test.ts",
     "eval": "node eval/report.ts",
     "near-misses": "node eval/near-misses.ts",
-    "train": "uv run --project train train/train.py"
+    "train": "uv run --project train train/train.py",
+    "convert-adserp": "node eval/convert-adserp.ts"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.7",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
+    "playwright": "^1.65.1",
     "typescript": "^7.0.2"
   }
 }

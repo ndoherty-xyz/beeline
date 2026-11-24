@@ -18,6 +18,8 @@ export type Trace = {
   pointerCursor: boolean;
   version?: 2;
   id?: string;
+  /** Who recorded it, in converted public datasets (e.g. `adserp-p004`), to hold out whole people. */
+  person?: string;
   page?: string;
   seq?: number;
   sinceLoad?: number;

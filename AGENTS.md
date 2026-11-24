@@ -55,3 +55,7 @@ Training is Python (numpy, managed by uv in `train/`): `npm run train -- data/<e
 `src/model-weights.json` (gitignored: it's fitted to personal movement, never commit it) and
 `test/model-fixture.json` (random weights, so the parity test needs no trained model) together. `train/beeline_model.py` mirrors
 `src/model.ts`; change both, then retrain so the fixture matches.
+
+Public data: `npm run convert-adserp -- <unzipped AdSERP dir> data/adserp-traces.jsonl` turns the AdSERP dataset
+(Zenodo 15236546, CC BY 4.0) into traces from 47 other people, with a `person` field for holding people out. Download
+its `mouse-movement-data`, `trial-metadata` and `serps` zips one at a time, and `npx playwright install chromium` once.

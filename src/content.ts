@@ -2,24 +2,10 @@
 
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 import { predictTargetProbabilities } from "./model.ts";
+import { TARGET_SELECTOR } from "./targets.ts";
 import modelWeights from "./model-weights.json";
 
 // Targets ----------
-
-const TARGET_SELECTOR = [
-  "a[href]",
-  "button",
-  "input:not([type=hidden])",
-  "select",
-  "textarea",
-  "summary",
-  "label[for]",
-  ...["button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem"].map(
-    (role) => `[role=${role}]`,
-  ),
-  "[onclick]",
-  "[tabindex]:not([tabindex='-1'])",
-].join(",");
 
 // The visible targets and their viewport rectangles, at the same indexes.
 let targetElements: Element[] = [];

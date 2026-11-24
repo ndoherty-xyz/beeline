@@ -1,5 +1,7 @@
 // The learned target predictor: one small MLP scores every target from cursor-motion and target features, and a
-// softmax across targets gives a probability each. Pure, so traces can be replayed through it in Node.
+// softmax across targets gives a probability each. Weights trained with `withinMs` add a "no click within that time"
+// option to the softmax, scored from the motion alone, so probabilities no longer have to sum to 1. Pure, so traces
+// can be replayed through it in Node.
 // Trained in train/ (Python); train/beeline_model.py mirrors the features and scoring here exactly.
 
 import type { Rect, TimedPoint } from "./baselines.ts";
@@ -12,6 +14,11 @@ export type ModelWeights = {
   hiddenWeights: number[][];
   hiddenBiases: number[];
   outputWeights: number[];
+  /** Set when trained to predict a click on each target within this many ms, with the none option below. */
+  withinMs?: number;
+  /** The none option's score: a linear function of the motion features. */
+  noneWeights?: number[];
+  noneBias?: number;
 };
 
 // Features ----------
@@ -151,16 +158,21 @@ export function scoreTargets(weights: ModelWeights, history: TimedPoint[], targe
 }
 
 /**
- * Function to predict the probability that each target is the one about to be clicked.
+ * Function to predict how likely each target is to be clicked: its share of the next click, or with `withinMs`
+ * weights, the chance it's clicked within that time.
  * @param weights The trained weights.
  * @param history Cursor samples, oldest first; the last is the current one.
  * @param targetRects The visible targets.
- * @returns One probability per target, summing to 1.
+ * @returns One probability per target; without `withinMs`, they sum to 1.
  */
 export function predictTargetProbabilities(weights: ModelWeights, history: TimedPoint[], targetRects: Rect[]): number[] {
   const scores = scoreTargets(weights, history, targetRects);
+  if (weights.withinMs !== undefined) {
+    const { motionFeatures } = computeMotionFeatures(history);
+    scores.push(motionFeatures.reduce((sum, feature, index) => sum + weights.noneWeights![index] * feature, weights.noneBias!));
+  }
   const maxScore = Math.max(...scores);
   const exponentials = scores.map((score) => Math.exp(score - maxScore));
   const total = exponentials.reduce((sum, value) => sum + value, 0);
-  return exponentials.map((value) => value / total);
+  return exponentials.slice(0, targetRects.length).map((value) => value / total);
 }

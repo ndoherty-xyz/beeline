@@ -1,51 +1,75 @@
 """Train beeline's base model on recorded traces and export it for src/model.ts.
 
-Usage: uv run --project train train/train.py data/traces-<date>.jsonl
+Usage: uv run --project train train/train.py data/traces-<date>.jsonl [--within-ms 300] [--out weights.json]
 
-Writes src/model-weights.json (gitignored: trained on personal movement), and test/model-fixture.json: synthetic
+By default the model learns each target's share of the next click (a softmax across targets). With --within-ms it
+learns each target's chance of being clicked within that many ms: the softmax gains a "no click by then" option,
+scored from the motion features alone.
+
+Writes src/model-weights.json (or --out) (gitignored: trained on personal movement), and test/model-fixture.json: synthetic
 traces and random weights with the scores Python gives them, which test/model.test.ts checks the TS model
 reproduces.
 """
 
+import argparse
 import json
 import math
-import sys
 from pathlib import Path
 
 import numpy as np
 
-from beeline_model import compute_features, score_targets, softmax
+from beeline_model import MOTION_FEATURE_COUNT, compute_features, predict_within, score_targets, softmax
 
 REPO = Path(__file__).resolve().parent.parent
 HELD_OUT_SHARE = 0.2
-SNAPSHOT_WINDOW_MS = 800
+SNAPSHOT_WINDOW_MS = 1000
 SNAPSHOT_STRIDE = 2  # every other sample: ~16 ms at 120 Hz
 HIDDEN_UNITS = 128
 EPOCHS = 30
 TRACES_PER_BATCH = 32
 LEARNING_RATE = 3e-3
 WEIGHT_DECAY = 1e-4
+RETRY_GAP_MS = 1000
 
 
 # Data ----------
 
 
-def load_acquisitions(path):
-    """Load the clicks where the cursor moved onto the clicked target (eval/replay.ts isAcquisition), oldest first."""
-    acquisitions = []
+def load_traces(path):
+    """Load every trace, keeping only the samples after the last scroll (eval/replay.ts samplesSinceLastScroll), sorted."""
+    traces = []
     for line in Path(path).read_text().splitlines():
         trace = json.loads(line)
-        # Only the samples after the last scroll (eval/replay.ts samplesSinceLastScroll), which is all v1 recorded.
         last_scroll = max((event[0] for scroller in trace.get("scrollers", []) for event in scroller["events"]), default=-math.inf)
-        trace["samples"] = [sample for sample in trace["samples"] if sample[0] > last_scroll]
+        trace["samples"] = sorted((sample for sample in trace["samples"] if sample[0] > last_scroll), key=lambda sample: sample[0])
+        traces.append(trace)
+    return traces
+
+
+def find_acquisitions(traces):
+    """Return the clicks where the cursor moved onto the clicked target (eval/replay.ts isAcquisition), oldest first."""
+    acquisitions = []
+    for trace in traces:
         if trace["clicked"] == -1 or not trace["samples"]:
             continue
-        trace["samples"].sort(key=lambda sample: sample[0])
         x, y = trace["samples"][0][1:3]
         left, top, width, height = trace["targets"][trace["clicked"]]
         if not (left <= x <= left + width and top <= y <= top + height):
             acquisitions.append(trace)
     return sorted(acquisitions, key=lambda trace: trace["time"])
+
+
+def find_empty_clicks_without_retry(traces):
+    """Return clicks on nothing with no target click in the second after (eval/replay.ts findEmptyClicksWithoutRetry)."""
+    trace_by_id = {trace["id"]: trace for trace in traces if "id" in trace}
+    empty_clicks = []
+    for trace in traces:
+        if trace.get("version") != 2 or trace["clicked"] != -1 or trace["pointerCursor"] or not trace["samples"]:
+            continue
+        following = trace_by_id.get(f"{trace['page']}-{trace['seq'] + 1}")
+        if not following or following["clicked"] == -1 or following["time"] - trace["time"] > RETRY_GAP_MS:
+            empty_clicks.append(trace)
+    return empty_clicks
 
 
 def to_rects(targets):
@@ -55,35 +79,60 @@ def to_rects(targets):
 
 
 def build_snapshots(trace):
-    """Return model inputs for every snapshot of one click, as an (S, N, features) float32 array."""
+    """Return model inputs for every snapshot of one click, as an (S, N, features) float32 array, and their times."""
     samples = np.asarray(trace["samples"], dtype=np.float64)
     times, xs, ys = samples[:, 0], samples[:, 1], samples[:, 2]
     rects = to_rects(trace["targets"])
     # Counting back from the last sample, which is where the cursor rested at the click even if that was earlier.
     snapshot_indices = np.flatnonzero(times >= min(-SNAPSHOT_WINDOW_MS, times[-1]))[::-1][::SNAPSHOT_STRIDE][::-1]
-    return np.stack([compute_features(times, xs, ys, index, rects) for index in snapshot_indices]).astype(np.float32)
+    features = np.stack([compute_features(times, xs, ys, index, rects) for index in snapshot_indices]).astype(np.float32)
+    return features, times[snapshot_indices]
+
+
+def label_snapshots(trace, snapshot_times, within_ms):
+    """Return the label per snapshot: the clicked target's index, or with within_ms, -1 (none) where the click is
+    further off than that."""
+    if within_ms is None:
+        return np.full(len(snapshot_times), trace["clicked"])
+    return np.where(snapshot_times >= -within_ms, trace["clicked"], -1)
 
 
 # Training ----------
 
 
 def compute_loss_and_gradients(params, inputs, group_sizes, labels):
-    """Return the mean cross-entropy over snapshots, gradients for each param, and per-snapshot top-1 hits.
+    """Return the mean cross-entropy over snapshots, gradients for each param, and the mean probability given to the
+    clicked target where there is one.
 
-    inputs holds every snapshot's targets back to back; group_sizes gives each snapshot's target count and
-    labels the clicked target's index within it.
+    inputs holds every snapshot's targets back to back; group_sizes gives each snapshot's target count and labels
+    the clicked target's index within it, or -1 for the none option (only present when params has "none_weights").
     """
     hidden_pre = inputs @ params["hidden_weights"].T + params["hidden_biases"]
     hidden = np.maximum(0, hidden_pre)
     scores = hidden @ params["output_weights"]
 
     starts = np.concatenate([[0], np.cumsum(group_sizes)[:-1]])
-    group_max = np.repeat(np.maximum.reduceat(scores, starts), group_sizes)
-    exponentials = np.exp(scores - group_max)
-    probabilities = exponentials / np.repeat(np.add.reduceat(exponentials, starts), group_sizes)
-    label_rows = starts + labels
-    loss = -np.log(probabilities[label_rows] + 1e-12).mean()
-    top1_hits = scores[label_rows] >= group_max[label_rows]
+    group_max = np.maximum.reduceat(scores, starts)
+    within = "none_weights" in params
+    if within:
+        motion = inputs[starts, :MOTION_FEATURE_COUNT]
+        none_scores = motion @ params["none_weights"] + params["none_bias"]
+        group_max = np.maximum(group_max, none_scores)
+    exponentials = np.exp(scores - np.repeat(group_max, group_sizes))
+    totals = np.add.reduceat(exponentials, starts)
+    if within:
+        none_exponentials = np.exp(none_scores - group_max)
+        totals += none_exponentials
+    probabilities = exponentials / np.repeat(totals, group_sizes)
+
+    has_target = labels >= 0
+    label_rows = (starts + labels)[has_target]
+    label_probabilities = probabilities[label_rows]
+    if within:
+        none_probabilities = none_exponentials / totals
+        label_probabilities = np.concatenate([label_probabilities, none_probabilities[~has_target]])
+    loss = -np.log(label_probabilities + 1e-12).mean()
+    clicked_mean = probabilities[label_rows].mean()
 
     score_gradient = probabilities
     score_gradient[label_rows] -= 1
@@ -94,18 +143,21 @@ def compute_loss_and_gradients(params, inputs, group_sizes, labels):
         "hidden_weights": hidden_gradient.T @ inputs,
         "hidden_biases": hidden_gradient.sum(axis=0),
     }
-    return loss, gradients, top1_hits
+    if within:
+        none_gradient = (none_probabilities - ~has_target) / len(group_sizes)
+        gradients["none_weights"] = motion.T @ none_gradient
+        gradients["none_bias"] = none_gradient.sum()
+    return loss, gradients, clicked_mean
 
 
-def stack_batch(snapshots, clicked):
-    """Flatten a list of per-click (S, N, F) arrays into inputs, group sizes and labels."""
+def stack_batch(snapshots, labels):
+    """Flatten a list of per-click (S, N, F) arrays and their (S,) labels into inputs, group sizes and labels."""
     inputs = np.concatenate([block.reshape(-1, block.shape[2]) for block in snapshots])
     group_sizes = np.concatenate([np.full(block.shape[0], block.shape[1]) for block in snapshots])
-    labels = np.concatenate([np.full(block.shape[0], label) for block, label in zip(snapshots, clicked)])
-    return inputs, group_sizes, labels
+    return inputs, group_sizes, np.concatenate(labels)
 
 
-def train(train_snapshots, train_clicked, held_out_snapshots, held_out_clicked):
+def train(train_snapshots, train_labels, held_out_snapshots, held_out_labels, within):
     """Fit the scorer with Adam on standardised inputs; returns params and the standardisation."""
     rng = np.random.default_rng(0)
     all_inputs = np.concatenate([block.reshape(-1, block.shape[2]) for block in train_snapshots])
@@ -114,7 +166,7 @@ def train(train_snapshots, train_clicked, held_out_snapshots, held_out_clicked):
     del all_inputs
     standardise = lambda block: ((block - mean) / std).astype(np.float32)
     train_snapshots = [standardise(block) for block in train_snapshots]
-    held_out = stack_batch([standardise(block) for block in held_out_snapshots], held_out_clicked)
+    held_out = stack_batch([standardise(block) for block in held_out_snapshots], held_out_labels)
 
     feature_count = train_snapshots[0].shape[2]
     params = {
@@ -122,6 +174,9 @@ def train(train_snapshots, train_clicked, held_out_snapshots, held_out_clicked):
         "hidden_biases": np.zeros(HIDDEN_UNITS),
         "output_weights": rng.normal(0, 1 / np.sqrt(HIDDEN_UNITS), HIDDEN_UNITS),
     }
+    if within:
+        params["none_weights"] = np.zeros(MOTION_FEATURE_COUNT)
+        params["none_bias"] = np.array(0.0)
     first_moment = {name: np.zeros_like(value) for name, value in params.items()}
     second_moment = {name: np.zeros_like(value) for name, value in params.items()}
     step = 0
@@ -130,7 +185,7 @@ def train(train_snapshots, train_clicked, held_out_snapshots, held_out_clicked):
         losses = []
         for start in range(0, len(order), TRACES_PER_BATCH):
             batch = order[start : start + TRACES_PER_BATCH]
-            inputs, group_sizes, labels = stack_batch([train_snapshots[i] for i in batch], [train_clicked[i] for i in batch])
+            inputs, group_sizes, labels = stack_batch([train_snapshots[i] for i in batch], [train_labels[i] for i in batch])
             loss, gradients, _ = compute_loss_and_gradients(params, inputs, group_sizes, labels)
             losses.append(loss)
             step += 1
@@ -141,10 +196,11 @@ def train(train_snapshots, train_clicked, held_out_snapshots, held_out_clicked):
                 corrected_first = first_moment[name] / (1 - 0.9**step)
                 corrected_second = second_moment[name] / (1 - 0.999**step)
                 params[name] -= LEARNING_RATE * corrected_first / (np.sqrt(corrected_second) + 1e-8)
-        held_out_loss, _, held_out_hits = compute_loss_and_gradients(params, *held_out)
+        held_out_loss, _, held_out_metric = compute_loss_and_gradients(params, *held_out)
+        metric_name = "mean p of the clicked target" + (" within the window" if within else "")
         print(
             f"epoch {epoch + 1:2d}: train loss {np.mean(losses):.3f}, "
-            f"held-out loss {held_out_loss:.3f}, held-out top-1 {held_out_hits.mean():.1%}"
+            f"held-out loss {held_out_loss:.3f}, held-out {metric_name} {held_out_metric:.1%}"
         )
     return params, mean, std
 
@@ -152,15 +208,21 @@ def train(train_snapshots, train_clicked, held_out_snapshots, held_out_clicked):
 # Export ----------
 
 
-def export_weights(params, mean, std, trained_until):
+def export_weights(params, mean, std, trained_until, within_ms):
     """Fold the standardisation into the hidden layer and return weights in the src/model.ts format."""
     hidden_weights = params["hidden_weights"] / std
-    return {
+    weights = {
         "trainedUntil": trained_until,
         "hiddenWeights": hidden_weights.tolist(),
         "hiddenBiases": (params["hidden_biases"] - hidden_weights @ mean).tolist(),
         "outputWeights": params["output_weights"].tolist(),
     }
+    if within_ms is not None:
+        none_weights = params["none_weights"] / std[:MOTION_FEATURE_COUNT]
+        weights["withinMs"] = within_ms
+        weights["noneWeights"] = none_weights.tolist()
+        weights["noneBias"] = float(params["none_bias"] - none_weights @ mean[:MOTION_FEATURE_COUNT])
+    return weights
 
 
 def make_fixture_traces():
@@ -202,43 +264,61 @@ def make_fixture_weights(feature_count):
         "hiddenWeights": rng.normal(0, 1 / np.sqrt(feature_count), (HIDDEN_UNITS, feature_count)).tolist(),
         "hiddenBiases": rng.normal(0, 0.5, HIDDEN_UNITS).tolist(),
         "outputWeights": rng.normal(0, 1 / np.sqrt(HIDDEN_UNITS), HIDDEN_UNITS).tolist(),
+        "noneWeights": rng.normal(0, 1, MOTION_FEATURE_COUNT).tolist(),
+        "noneBias": float(rng.normal(0, 1)),
     }
 
 
 def score_fixture_trace(weights, trace):
-    """Return the scores and probabilities the model gives every target at every sample of a trace."""
+    """Return the scores, shares and within-window probabilities the model gives every target at every sample of a trace."""
     samples = np.asarray(trace["samples"], dtype=np.float64)
     rects = to_rects(trace["targets"])
-    scores = [score_targets(weights, compute_features(samples[:, 0], samples[:, 1], samples[:, 2], index, rects)) for index in range(len(samples))]
-    return [s.tolist() for s in scores], [softmax(s).tolist() for s in scores]
+    features = [compute_features(samples[:, 0], samples[:, 1], samples[:, 2], index, rects) for index in range(len(samples))]
+    scores = [score_targets(weights, f) for f in features]
+    return [s.tolist() for s in scores], [softmax(s).tolist() for s in scores], [predict_within(weights, f).tolist() for f in features]
 
 
 def main():
     """Train on the export given on the command line and write the weights and parity fixture."""
-    acquisitions = load_acquisitions(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("traces")
+    parser.add_argument("--within-ms", type=int, help="learn each target's chance of a click within this many ms")
+    parser.add_argument("--out", default=REPO / "src/model-weights.json", type=Path)
+    args = parser.parse_args()
+
+    traces = load_traces(args.traces)
+    acquisitions = find_acquisitions(traces)
     split = round(len(acquisitions) * (1 - HELD_OUT_SHARE))
     train_traces, held_out_traces = acquisitions[:split], acquisitions[split:]
+    trained_until = train_traces[-1]["time"]
     print(f"{len(acquisitions)} clicks: training on {len(train_traces)}, holding out the newest {len(held_out_traces)}")
+    if args.within_ms is not None:
+        # Clicks on nothing are the only windows where no target is about to be clicked.
+        empty_clicks = find_empty_clicks_without_retry(traces)
+        train_traces += [trace for trace in empty_clicks if trace["time"] <= trained_until]
+        held_out_traces += [trace for trace in empty_clicks if trace["time"] > trained_until]
+        print(f"plus {len(empty_clicks)} clicks on nothing, split at the same time")
 
-    train_snapshots = [build_snapshots(trace) for trace in train_traces]
-    held_out_snapshots = [build_snapshots(trace) for trace in held_out_traces]
-    params, mean, std = train(
-        train_snapshots, [t["clicked"] for t in train_traces], held_out_snapshots, [t["clicked"] for t in held_out_traces]
-    )
+    train_snapshots, train_times = zip(*(build_snapshots(trace) for trace in train_traces))
+    held_out_snapshots, held_out_times = zip(*(build_snapshots(trace) for trace in held_out_traces))
+    train_labels = [label_snapshots(trace, times, args.within_ms) for trace, times in zip(train_traces, train_times)]
+    held_out_labels = [label_snapshots(trace, times, args.within_ms) for trace, times in zip(held_out_traces, held_out_times)]
+    params, mean, std = train(list(train_snapshots), train_labels, list(held_out_snapshots), held_out_labels, args.within_ms is not None)
 
-    weights = export_weights(params, mean, std, train_traces[-1]["time"])
-    (REPO / "src/model-weights.json").write_text(json.dumps(weights) + "\n")
+    weights = export_weights(params, mean, std, trained_until, args.within_ms)
+    args.out.write_text(json.dumps(weights) + "\n")
     fixture_weights = make_fixture_weights(len(weights["hiddenWeights"][0]))
     fixture_traces = make_fixture_traces()
     fixture_outputs = [score_fixture_trace(fixture_weights, trace) for trace in fixture_traces]
     fixture = {
         "weights": fixture_weights,
         "traces": fixture_traces,
-        "scores": [scores for scores, _ in fixture_outputs],
-        "probabilities": [probabilities for _, probabilities in fixture_outputs],
+        "scores": [scores for scores, _, _ in fixture_outputs],
+        "probabilities": [probabilities for _, probabilities, _ in fixture_outputs],
+        "withinProbabilities": [probabilities for _, _, probabilities in fixture_outputs],
     }
     (REPO / "test/model-fixture.json").write_text(json.dumps(fixture) + "\n")
-    print("wrote src/model-weights.json and test/model-fixture.json")
+    print(f"wrote {args.out} and test/model-fixture.json")
 
 
 if __name__ == "__main__":

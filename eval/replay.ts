@@ -308,3 +308,18 @@ export function findNearMisses(traces: Trace[]): { nearMisses: NearMiss[]; unmat
   }
   return { nearMisses, unmatchedRetries };
 }
+
+/**
+ * Function to find clicks on empty space with no click on a target in the second after: movement that ended without
+ * clicking anything, as close to "nothing about to be clicked" as the traces get.
+ * @param traces The recorded clicks.
+ * @returns Those clicks.
+ */
+export function findEmptyClicksWithoutRetry(traces: Trace[]): Trace[] {
+  const traceById = new Map(traces.filter((trace) => trace.id).map((trace) => [trace.id!, trace]));
+  return traces.filter((trace) => {
+    if (trace.version !== 2 || trace.clicked !== -1 || trace.pointerCursor || trace.samples.length === 0) return false;
+    const next = traceById.get(`${trace.page}-${trace.seq! + 1}`);
+    return !next || next.clicked === -1 || next.time - trace.time > NEAR_MISS_MAX_GAP_MS;
+  });
+}

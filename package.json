@@ -10,7 +10,7 @@
     "test": "node --test test/*.test.ts",
     "eval": "node eval/report.ts",
     "near-misses": "node eval/near-misses.ts",
-    "train": "uv run --project train train/train.py --within-ms 650",
+    "train": "uv run --project train train/train.py",
     "convert-adserp": "node eval/convert-adserp.ts"
   },
   "devDependencies": {

@@ -1,24 +1,25 @@
 // The learned target predictor: one small MLP scores every target from cursor-motion and target features, and a
-// softmax across targets gives a probability each. Weights trained with `withinMs` add a "no click within that time"
-// option to the softmax, scored from the motion alone, so probabilities no longer have to sum to 1. Pure, so traces
-// can be replayed through it in Node.
+// softmax over the targets plus a "no click within `withinMs`" option, scored from the motion alone, gives each
+// target's chance of being clicked within that time. Pure, so traces can be replayed through it in Node.
 // Trained in train/ (Python); train/beeline_model.py mirrors the features and scoring here exactly.
 
 import type { Rect, TimedPoint } from "./baselines.ts";
 
 /** Trained weights, as exported by train/train.py. Feature standardisation is folded into the hidden layer. */
 export type ModelWeights = {
-  /** Time of the newest trace in the training set; only later traces are held out. */
+  /** Time of the newest of the recorder's own traces in the training set; only later ones are held out. */
   trainedUntil: number;
+  /** People in other datasets (a trace's `person`) whose traces were all held out. */
+  heldOutPeople: string[];
   /** One row of input weights per hidden unit. */
   hiddenWeights: number[][];
   hiddenBiases: number[];
   outputWeights: number[];
-  /** Set when trained to predict a click on each target within this many ms, with the none option below. */
-  withinMs?: number;
+  /** Probabilities are each target's chance of a click within this many ms. */
+  withinMs: number;
   /** The none option's score: a linear function of the motion features. */
-  noneWeights?: number[];
-  noneBias?: number;
+  noneWeights: number[];
+  noneBias: number;
 };
 
 // Features ----------
@@ -158,19 +159,16 @@ export function scoreTargets(weights: ModelWeights, history: TimedPoint[], targe
 }
 
 /**
- * Function to predict how likely each target is to be clicked: its share of the next click, or with `withinMs`
- * weights, the chance it's clicked within that time.
+ * Function to predict each target's chance of being clicked within `weights.withinMs`.
  * @param weights The trained weights.
  * @param history Cursor samples, oldest first; the last is the current one.
  * @param targetRects The visible targets.
- * @returns One probability per target; without `withinMs`, they sum to 1.
+ * @returns One probability per target; they sum to less than 1, the rest being no click by then.
  */
 export function predictTargetProbabilities(weights: ModelWeights, history: TimedPoint[], targetRects: Rect[]): number[] {
   const scores = scoreTargets(weights, history, targetRects);
-  if (weights.withinMs !== undefined) {
-    const { motionFeatures } = computeMotionFeatures(history);
-    scores.push(motionFeatures.reduce((sum, feature, index) => sum + weights.noneWeights![index] * feature, weights.noneBias!));
-  }
+  const { motionFeatures } = computeMotionFeatures(history);
+  scores.push(motionFeatures.reduce((sum, feature, index) => sum + weights.noneWeights[index] * feature, weights.noneBias));
   const maxScore = Math.max(...scores);
   const exponentials = scores.map((score) => Math.exp(score - maxScore));
   const total = exponentials.reduce((sum, value) => sum + value, 0);

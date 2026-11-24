@@ -151,10 +151,12 @@ printBaselineTable("Large targets (5% or more)", acquisitions.filter((trace) => 
 // Model ----------
 
 const weights: ModelWeights = JSON.parse(readFileSync(process.argv[3] ?? new URL("../src/model-weights.json", import.meta.url), "utf8"));
+// The recorder's own clicks after training, or every click by a held-out person from another dataset.
+const isHeldOut = (trace: Trace) => trace.time > weights.trainedUntil || weights.heldOutPeople.includes(trace.person!);
 const heldOutReplays = acquisitions
-  .filter((trace) => trace.time > weights.trainedUntil)
+  .filter(isHeldOut)
   .map((trace) => ({ trace, frames: replayModel(trace, weights) }));
-console.log(`\n## Model on clicks held out from training (after ${new Date(weights.trainedUntil).toISOString()})`);
+console.log(`\n## Model on clicks held out from training (after ${new Date(weights.trainedUntil).toISOString()}, and ${weights.heldOutPeople.length} held-out people)`);
 printModelTable("All held out", heldOutReplays);
 printModelThresholdSweep("all held out", heldOutReplays);
 printModelTable("Small held out", heldOutReplays.filter(({ trace }) => clickedShare(trace) < 0.005));
@@ -174,9 +176,9 @@ printModelThresholdSweep("link navigations held out", linkNavigationReplays, fet
 
 // What a public `p` should mean: the chance this target is clicked within WITHIN_MS. Every recorded window ends in a
 // click, so true rates here are far above everyday use, where most movement clicks nothing.
-const WITHIN_MS = weights.withinMs ?? 300;
+const WITHIN_MS = weights.withinMs;
 const heldOutEmptyReplays = findEmptyClicksWithoutRetry(allTraces)
-  .filter((trace) => trace.time > weights.trainedUntil)
+  .filter(isHeldOut)
   .map((trace) => ({ trace, frames: replayModel(trace, weights) }));
 console.log(`\n## Click within ${WITHIN_MS} ms, held out (${heldOutReplays.length} clicks on targets, ${heldOutEmptyReplays.length} on nothing)`);
 console.log(`Each frame and target is one prediction; it's right if that target was clicked within ${WITHIN_MS} ms.\n`);

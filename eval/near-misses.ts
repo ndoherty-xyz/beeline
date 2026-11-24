@@ -70,10 +70,10 @@ for (const [name, group] of [
   ["on a target", targetClicks],
 ] as const) {
   const outcomes = group.map((trace) => trace.outcome).filter((outcome) => outcome?.mutationsAfter !== undefined);
-  const share = (key: "clicked" | "selection" | "focusChanged" | "navigated") =>
-    `${Math.round((outcomes.filter((outcome) => outcome![key]).length / outcomes.length) * 100)}%`;
+  const share = (key: "clicked" | "selection" | "focusChanged" | "navigatedMs") =>
+    `${Math.round((outcomes.filter((outcome) => outcome![key] !== undefined && outcome![key] !== false).length / outcomes.length) * 100)}%`;
   const mutationsAfter = outcomes.map((outcome) => outcome!.mutationsAfter!);
-  console.log(`| ${name} | ${outcomes.length} of ${group.length} | ${share("clicked")} | ${share("selection")} | ${share("focusChanged")} | ${share("navigated")} | ${pickQuantile(mutationsAfter, 0.5)} |`);
+  console.log(`| ${name} | ${outcomes.length} of ${group.length} | ${share("clicked")} | ${share("selection")} | ${share("focusChanged")} | ${share("navigatedMs")} | ${pickQuantile(mutationsAfter, 0.5)} |`);
 }
 
 console.log("\nCursor movement during the press, pointerdown to pointerup, px median (p90):\n");

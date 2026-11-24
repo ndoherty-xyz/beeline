@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import type { ModelWeights } from "../src/model.ts";
 import {
   BASELINES,
+  fetchKeysByDestination,
+  fetchKeysByTarget,
   isAcquisition,
+  isLinkNavigation,
   replayForesight,
   replayModel,
   samplesSinceLastScroll,
@@ -66,12 +69,13 @@ function formatScoreRow(name: string, { clicks, hits, fires, leadTimesMs }: Pred
  * Function to print one markdown table of baseline metrics.
  * @param title What the clicks are.
  * @param traces The clicks.
+ * @param toFetchKeys Which targets share a fetch (-1: never fetched).
  * @returns Nothing.
  */
-function printBaselineTable(title: string, traces: Trace[]): void {
+function printBaselineTable(title: string, traces: Trace[], toFetchKeys = fetchKeysByTarget): void {
   console.log(`\n### ${title} (${traces.length} clicks)\n`);
   console.log(TABLE_HEADER);
-  for (const [name, replay] of Object.entries(BASELINES)) console.log(formatScoreRow(name, scorePredictor(traces, replay)));
+  for (const [name, replay] of Object.entries(BASELINES)) console.log(formatScoreRow(name, scorePredictor(traces, replay, toFetchKeys)));
 }
 
 /**
@@ -79,18 +83,21 @@ function printBaselineTable(title: string, traces: Trace[]): void {
  * Foresight's median lead time, and its top-1 accuracy at fixed times before the click.
  * @param title What the clicks are.
  * @param replays The clicks with the model's frames.
+ * @param toFetchKeys Which targets share a fetch (-1: never fetched).
  * @returns Nothing.
  */
-function printModelTable(title: string, replays: { trace: Trace; frames: ModelFrame[] }[]): void {
+function printModelTable(title: string, replays: { trace: Trace; frames: ModelFrame[] }[], toFetchKeys = fetchKeysByTarget): void {
   const traces = replays.map(({ trace }) => trace);
-  printBaselineTable(title, traces);
-  const foresight = scorePredictor(traces, replayForesight);
+  printBaselineTable(title, traces, toFetchKeys);
+  const foresight = scorePredictor(traces, replayForesight, toFetchKeys);
   const modelScores = Array.from({ length: 99 }, (_, index) => (index + 1) / 100).map((threshold) => ({
     threshold,
-    score: scoreModelAtThreshold(replays, threshold),
+    score: scoreModelAtThreshold(replays, threshold, toFetchKeys),
   }));
   const atPrecision = modelScores.find(({ score }) => score.hits / score.fires >= foresight.hits / foresight.fires);
-  const atLead = modelScores.findLast(({ score }) => pickQuantile(score.leadTimesMs, 0.5) >= pickQuantile(foresight.leadTimesMs, 0.5));
+  // Lead isn't monotonic at high thresholds, where a few clicks fire, so stop at the first that falls short.
+  const firstShortOfLead = modelScores.findIndex(({ score }) => !(pickQuantile(score.leadTimesMs, 0.5) >= pickQuantile(foresight.leadTimesMs, 0.5)));
+  const atLead = modelScores[(firstShortOfLead === -1 ? modelScores.length : firstShortOfLead) - 1];
   if (atPrecision) console.log(formatScoreRow(`model, p ≥ ${atPrecision.threshold} (Foresight's precision)`, atPrecision.score));
   if (atLead) console.log(formatScoreRow(`model, p ≥ ${atLead.threshold} (Foresight's lead)`, atLead.score));
 
@@ -107,14 +114,16 @@ function printModelTable(title: string, replays: { trace: Trace; frames: ModelFr
 
 /**
  * Function to print the model at a spread of thresholds, to show what each operating point saves and costs.
+ * @param title What the clicks are.
  * @param replays The clicks with the model's frames.
+ * @param toFetchKeys Which targets share a fetch (-1: never fetched).
  * @returns Nothing.
  */
-function printModelThresholdSweep(replays: { trace: Trace; frames: ModelFrame[] }[]): void {
-  console.log(`\n### Model by threshold, all held out (${replays.length} clicks)\n`);
+function printModelThresholdSweep(title: string, replays: { trace: Trace; frames: ModelFrame[] }[], toFetchKeys = fetchKeysByTarget): void {
+  console.log(`\n### Model by threshold, ${title} (${replays.length} clicks)\n`);
   console.log(TABLE_HEADER);
   for (const threshold of [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) {
-    console.log(formatScoreRow(`model, p ≥ ${threshold}`, scoreModelAtThreshold(replays, threshold)));
+    console.log(formatScoreRow(`model, p ≥ ${threshold}`, scoreModelAtThreshold(replays, threshold, toFetchKeys)));
   }
 }
 
@@ -145,7 +154,16 @@ const heldOutReplays = acquisitions
   .map((trace) => ({ trace, frames: replayModel(trace, weights) }));
 console.log(`\n## Model on clicks held out from training (after ${new Date(weights.trainedUntil).toISOString()})`);
 printModelTable("All held out", heldOutReplays);
-printModelThresholdSweep(heldOutReplays);
+printModelThresholdSweep("all held out", heldOutReplays);
 printModelTable("Small held out", heldOutReplays.filter(({ trace }) => clickedShare(trace) < 0.005));
 printModelTable("Medium held out", heldOutReplays.filter(({ trace }) => clickedShare(trace) >= 0.005 && clickedShare(trace) < 0.05));
 printModelTable("Large held out", heldOutReplays.filter(({ trace }) => clickedShare(trace) >= 0.05));
+
+// Link navigations ----------
+
+// What prefetching would see: only clicks on http links that navigated, and only links fire, with links to the
+// same destination sharing one fetch.
+const linkNavigationReplays = heldOutReplays.filter(({ trace }) => isLinkNavigation(trace));
+console.log("\n## Link navigations held out: only links fire, one fetch per destination");
+printModelTable("Link navigations held out", linkNavigationReplays, fetchKeysByDestination);
+printModelThresholdSweep("link navigations held out", linkNavigationReplays, fetchKeysByDestination);

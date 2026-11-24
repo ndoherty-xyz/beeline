@@ -46,9 +46,13 @@ export type Outcome = {
   up?: [number, number, number];
   cancelled?: boolean;
   clicked?: boolean;
+  /** The click event's detail: 1 single, 2 double. */
+  clickCount?: number;
   selection?: boolean;
   focusChanged?: boolean;
-  navigated?: boolean;
+  /** When the URL first changed or the page was left; missing if no navigation was seen within watchedMs. */
+  navigatedMs?: number;
+  watchedMs?: number;
   mutationsBefore?: number;
   mutationsAfter?: number;
 };
@@ -143,22 +147,62 @@ export function findFirstFires(trace: Trace, segments: PredictionSegment[]): Map
   return firstFires;
 }
 
+/**
+ * Function to give each target its own fetch, so every target that fires counts once.
+ * @param trace The recorded click.
+ * @returns One key per target: its index.
+ */
+export function fetchKeysByTarget(trace: Trace): number[] {
+  return trace.targets.map((_, index) => index);
+}
+
+/**
+ * Function to key targets by what a prefetch would fetch: http links by destination, so links to the same page
+ * share one fetch, and -1 for everything else, which can't be prefetched.
+ * @param trace A v2 recorded click.
+ * @returns One key per target: its destination id, or -1.
+ */
+export function fetchKeysByDestination(trace: Trace): number[] {
+  return trace.targetLinks!.map((link, index) => (link === 1 || link === 2 ? trace.targetDestinations![index] : -1));
+}
+
+/**
+ * Function to tell whether a click followed an http link and the page navigated: the clicks a prefetch could speed up.
+ * @param trace The recorded click.
+ * @returns True for a v2 click on a same- or cross-origin link that navigated.
+ */
+export function isLinkNavigation(trace: Trace): boolean {
+  const link = trace.targetLinks?.[trace.clicked];
+  return (link === 1 || link === 2) && trace.outcome?.navigatedMs !== undefined;
+}
+
 /** A predictor's totals over a set of clicks. */
 export type PredictorScore = { clicks: number; hits: number; fires: number; leadTimesMs: number[] };
 
 /**
- * Function to score a predictor over clicks: whether the clicked target fired, how early, and how many fires
- * there were in total.
+ * Function to score a predictor over clicks: whether the clicked target's fetch fired, how early, and how many
+ * fetches fired in total.
  * @param traces The clicks to score.
  * @param replay The predictor.
+ * @param toFetchKeys Which targets share a fetch (-1: never fetched); by default each target is its own.
  * @returns Its totals.
  */
-export function scorePredictor(traces: Trace[], replay: (trace: Trace) => PredictionSegment[]): PredictorScore {
+export function scorePredictor(
+  traces: Trace[],
+  replay: (trace: Trace) => PredictionSegment[],
+  toFetchKeys: (trace: Trace) => number[] = fetchKeysByTarget,
+): PredictorScore {
   const score: PredictorScore = { clicks: traces.length, hits: 0, fires: 0, leadTimesMs: [] };
   for (const trace of traces) {
-    const firstFires = findFirstFires(trace, replay(trace));
-    score.fires += firstFires.size;
-    const clickedFire = firstFires.get(trace.clicked);
+    const fetchKeys = toFetchKeys(trace);
+    // Each fetch fires when the first of its targets does.
+    const fetchFires = new Map<number, number>();
+    for (const [target, t] of findFirstFires(trace, replay(trace))) {
+      const key = fetchKeys[target];
+      if (key !== -1) fetchFires.set(key, Math.min(t, fetchFires.get(key) ?? t));
+    }
+    score.fires += fetchFires.size;
+    const clickedFire = fetchFires.get(fetchKeys[trace.clicked]);
     if (clickedFire === undefined) continue;
     score.hits++;
     score.leadTimesMs.push(-clickedFire);
@@ -190,21 +234,29 @@ export function replayModel(trace: Trace, weights: ModelWeights): ModelFrame[] {
  * threshold.
  * @param replays Each click with its model frames.
  * @param threshold The probability that fires a target.
+ * @param toFetchKeys Which targets share a fetch (-1: never fetched); by default each target is its own.
  * @returns The model's totals at that threshold.
  */
-export function scoreModelAtThreshold(replays: { trace: Trace; frames: ModelFrame[] }[], threshold: number): PredictorScore {
+export function scoreModelAtThreshold(
+  replays: { trace: Trace; frames: ModelFrame[] }[],
+  threshold: number,
+  toFetchKeys: (trace: Trace) => number[] = fetchKeysByTarget,
+): PredictorScore {
   const score: PredictorScore = { clicks: replays.length, hits: 0, fires: 0, leadTimesMs: [] };
   for (const { trace, frames } of replays) {
+    const fetchKeys = toFetchKeys(trace);
+    const clickedKey = fetchKeys[trace.clicked];
     const fired = new Set<number>();
     for (const { t, probabilities } of frames) {
       probabilities.forEach((probability, target) => {
-        if (probability < threshold || fired.has(target)) return;
-        fired.add(target);
-        if (target === trace.clicked) score.leadTimesMs.push(-t);
+        const key = fetchKeys[target];
+        if (key === -1 || probability < threshold || fired.has(key)) return;
+        fired.add(key);
+        if (key === clickedKey) score.leadTimesMs.push(-t);
       });
     }
     score.fires += fired.size;
-    if (fired.has(trace.clicked)) score.hits++;
+    if (fired.has(clickedKey)) score.hits++;
   }
   return score;
 }

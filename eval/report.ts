@@ -1,5 +1,5 @@
 // Prints the baseline metrics for a JSONL export of traces, as markdown tables.
-// Usage: npm run eval -- <traces.jsonl>
+// Usage: npm run eval -- <traces.jsonl> [weights.json, default src/model-weights.json]
 
 import { readFileSync } from "node:fs";
 import type { ModelWeights } from "../src/model.ts";
@@ -7,11 +7,13 @@ import {
   BASELINES,
   fetchKeysByDestination,
   fetchKeysByTarget,
+  findEmptyClicksWithoutRetry,
   isAcquisition,
   isLinkNavigation,
   replayForesight,
   replayModel,
   samplesSinceLastScroll,
+  targetToRect,
   scoreModelAtThreshold,
   scorePredictor,
   type ModelFrame,
@@ -148,11 +150,13 @@ printBaselineTable("Large targets (5% or more)", acquisitions.filter((trace) => 
 
 // Model ----------
 
-const weights: ModelWeights = JSON.parse(readFileSync(new URL("../src/model-weights.json", import.meta.url), "utf8"));
+const weights: ModelWeights = JSON.parse(readFileSync(process.argv[3] ?? new URL("../src/model-weights.json", import.meta.url), "utf8"));
+// The recorder's own clicks after training, or every click by a held-out person from another dataset.
+const isHeldOut = (trace: Trace) => trace.time > weights.trainedUntil || weights.heldOutPeople.includes(trace.person!);
 const heldOutReplays = acquisitions
-  .filter((trace) => trace.time > weights.trainedUntil)
+  .filter(isHeldOut)
   .map((trace) => ({ trace, frames: replayModel(trace, weights) }));
-console.log(`\n## Model on clicks held out from training (after ${new Date(weights.trainedUntil).toISOString()})`);
+console.log(`\n## Model on clicks held out from training (after ${new Date(weights.trainedUntil).toISOString()}, and ${weights.heldOutPeople.length} held-out people)`);
 printModelTable("All held out", heldOutReplays);
 printModelThresholdSweep("all held out", heldOutReplays);
 printModelTable("Small held out", heldOutReplays.filter(({ trace }) => clickedShare(trace) < 0.005));
@@ -167,3 +171,68 @@ const linkNavigationReplays = heldOutReplays.filter(({ trace }) => isLinkNavigat
 console.log("\n## Link navigations held out: only links fire, one fetch per destination");
 printModelTable("Link navigations held out", linkNavigationReplays, fetchKeysByDestination);
 printModelThresholdSweep("link navigations held out", linkNavigationReplays, fetchKeysByDestination);
+
+// Click within T ms ----------
+
+// What a public `p` should mean: the chance this target is clicked within WITHIN_MS. Every recorded window ends in a
+// click, so true rates here are far above everyday use, where most movement clicks nothing.
+const WITHIN_MS = weights.withinMs;
+const heldOutEmptyReplays = findEmptyClicksWithoutRetry(allTraces)
+  .filter(isHeldOut)
+  .map((trace) => ({ trace, frames: replayModel(trace, weights) }));
+console.log(`\n## Click within ${WITHIN_MS} ms, held out (${heldOutReplays.length} clicks on targets, ${heldOutEmptyReplays.length} on nothing)`);
+console.log(`Each frame and target is one prediction; it's right if that target was clicked within ${WITHIN_MS} ms.\n`);
+
+const BIN_EDGES = [0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0001];
+const bins = BIN_EDGES.slice(1).map(() => ({ predictions: 0, probabilitySum: 0, clicked: 0 }));
+let logLoss = 0;
+let predictionCount = 0;
+for (const { trace, frames } of [...heldOutReplays, ...heldOutEmptyReplays]) {
+  for (const { t, probabilities } of frames) {
+    probabilities.forEach((probability, target) => {
+      const clicked = target === trace.clicked && t >= -WITHIN_MS;
+      const bin = bins[BIN_EDGES.findIndex((edge) => probability < edge) - 1];
+      bin.predictions++;
+      bin.probabilitySum += probability;
+      if (clicked) bin.clicked++;
+      logLoss -= Math.log(Math.min(1 - 1e-7, Math.max(1e-7, clicked ? probability : 1 - probability)));
+      predictionCount++;
+    });
+  }
+}
+// Over predictions of 0.05 and up: the near-zero majority would dilute it to nothing.
+const confidentBins = bins.slice(1);
+const calibrationError =
+  confidentBins.reduce((sum, { probabilitySum, clicked }) => sum + Math.abs(probabilitySum - clicked), 0) /
+  confidentBins.reduce((sum, { predictions }) => sum + predictions, 0);
+console.log(`| p | predictions | mean p | clicked within ${WITHIN_MS} ms |\n|---|---|---|---|`);
+bins.forEach(({ predictions, probabilitySum, clicked }, index) => {
+  if (predictions === 0) return;
+  const range = `${BIN_EDGES[index]}-${Math.min(1, BIN_EDGES[index + 1])}`;
+  console.log(`| ${range} | ${predictions} | ${(probabilitySum / predictions).toFixed(3)} | ${(clicked / predictions).toFixed(3)} |`);
+});
+console.log(`\nLog loss per prediction ${(logLoss / predictionCount).toFixed(4)}; mean gap between p and the true rate for p ≥ 0.05: ${calibrationError.toFixed(3)}.`);
+
+// False alarms: p ≥ 0.5 where nothing is about to be clicked. A lone target is what a page with one button looks like.
+const reachesHalf = (frames: { probabilities: number[] }[], target: number) => frames.some(({ probabilities }) => probabilities[target] >= 0.5);
+const percentOf = (count: number, total: number) => `${Math.round((count / total) * 100)}%`;
+const emptyFalseAlarms = heldOutEmptyReplays.filter(({ trace, frames }) => trace.targets.some((_, target) => reachesHalf(frames, target)));
+// The unclicked target nearest the click, alone on the page: the hardest distractor.
+const loneDistractorFalseAlarms = heldOutReplays.filter(({ trace }) => {
+  const [, x, y] = trace.samples[trace.samples.length - 1];
+  const distanceTo = (target: Trace["targets"][number]) => {
+    const { left, top, right, bottom } = targetToRect(target);
+    return Math.hypot(Math.max(left - x, 0, x - right), Math.max(top - y, 0, y - bottom));
+  };
+  const distractors = trace.targets.map((target, index) => ({ index, distance: distanceTo(target) })).filter(({ index }) => index !== trace.clicked);
+  if (distractors.length === 0) return false;
+  const nearest = distractors.reduce((best, candidate) => (candidate.distance < best.distance ? candidate : best));
+  return reachesHalf(replayModel({ ...trace, targets: [trace.targets[nearest.index]] }, weights), 0);
+});
+// The clicked target alone: how high it reads early, and close to the click.
+const loneClickedFrames = heldOutReplays.flatMap(({ trace }) => replayModel({ ...trace, targets: [trace.targets[trace.clicked]] }, weights));
+const meanP = (frames: ModelFrame[]) => (frames.reduce((sum, { probabilities }) => sum + probabilities[0], 0) / frames.length).toFixed(2);
+console.log(`\n| false alarm check | clicks | reached p ≥ 0.5 |\n|---|---|---|`);
+console.log(`| click on nothing, any target | ${heldOutEmptyReplays.length} | ${percentOf(emptyFalseAlarms.length, heldOutEmptyReplays.length)} |`);
+console.log(`| nearest unclicked target, alone on the page | ${heldOutReplays.length} | ${percentOf(loneDistractorFalseAlarms.length, heldOutReplays.length)} |`);
+console.log(`\nClicked target alone on the page, mean p: ${meanP(loneClickedFrames.filter(({ t }) => t < -WITHIN_MS))} more than ${WITHIN_MS} ms before the click, ${meanP(loneClickedFrames.filter(({ t }) => t >= -WITHIN_MS))} within it.`);

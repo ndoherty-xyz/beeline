@@ -1,17 +1,25 @@
 // The learned target predictor: one small MLP scores every target from cursor-motion and target features, and a
-// softmax across targets gives a probability each. Pure, so traces can be replayed through it in Node.
+// softmax over the targets plus a "no click within `withinMs`" option, scored from the motion alone, gives each
+// target's chance of being clicked within that time. Pure, so traces can be replayed through it in Node.
 // Trained in train/ (Python); train/beeline_model.py mirrors the features and scoring here exactly.
 
 import type { Rect, TimedPoint } from "./baselines.ts";
 
 /** Trained weights, as exported by train/train.py. Feature standardisation is folded into the hidden layer. */
 export type ModelWeights = {
-  /** Time of the newest trace in the training set; only later traces are held out. */
+  /** Time of the newest of the recorder's own traces in the training set; only later ones are held out. */
   trainedUntil: number;
+  /** People in other datasets (a trace's `person`) whose traces were all held out. */
+  heldOutPeople: string[];
   /** One row of input weights per hidden unit. */
   hiddenWeights: number[][];
   hiddenBiases: number[];
   outputWeights: number[];
+  /** Probabilities are each target's chance of a click within this many ms. */
+  withinMs: number;
+  /** The none option's score: a linear function of the motion features. */
+  noneWeights: number[];
+  noneBias: number;
 };
 
 // Features ----------
@@ -151,16 +159,18 @@ export function scoreTargets(weights: ModelWeights, history: TimedPoint[], targe
 }
 
 /**
- * Function to predict the probability that each target is the one about to be clicked.
+ * Function to predict each target's chance of being clicked within `weights.withinMs`.
  * @param weights The trained weights.
  * @param history Cursor samples, oldest first; the last is the current one.
  * @param targetRects The visible targets.
- * @returns One probability per target, summing to 1.
+ * @returns One probability per target; they sum to less than 1, the rest being no click by then.
  */
 export function predictTargetProbabilities(weights: ModelWeights, history: TimedPoint[], targetRects: Rect[]): number[] {
   const scores = scoreTargets(weights, history, targetRects);
+  const { motionFeatures } = computeMotionFeatures(history);
+  scores.push(motionFeatures.reduce((sum, feature, index) => sum + weights.noneWeights[index] * feature, weights.noneBias));
   const maxScore = Math.max(...scores);
   const exponentials = scores.map((score) => Math.exp(score - maxScore));
   const total = exponentials.reduce((sum, value) => sum + value, 0);
-  return exponentials.map((value) => value / total);
+  return exponentials.slice(0, targetRects.length).map((value) => value / total);
 }

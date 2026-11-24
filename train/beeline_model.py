@@ -121,7 +121,9 @@ def score_targets(weights, features):
     return hidden @ np.asarray(weights["outputWeights"])
 
 
-def softmax(scores):
-    """Turn scores into probabilities summing to 1."""
+def predict_probabilities(weights, features):
+    """Return each target's chance of a click within weights["withinMs"]: a softmax over the targets and the none option."""
+    none_score = weights["noneBias"] + features[0, :MOTION_FEATURE_COUNT] @ np.asarray(weights["noneWeights"])
+    scores = np.append(score_targets(weights, features), none_score)
     exponentials = np.exp(scores - scores.max())
-    return exponentials / exponentials.sum()
+    return (exponentials / exponentials.sum())[:-1]

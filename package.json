@@ -1,12 +1,13 @@
 {
-  "name": "beeline",
+  "name": "beeline-repo",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "watch": "node scripts/build.mjs --watch",
-    "typecheck": "tsc",
+    "build": "npm run build -w beeline-extension",
+    "watch": "npm run watch -w beeline-extension",
+    "playground": "esbuild packages/beeline/playground/playground.ts --bundle --outdir=packages/beeline/playground/dist --servedir=packages/beeline/playground --serve=localhost:8123",
+    "typecheck": "tsc && tsc -p packages/beeline",
     "test": "node --test test/*.test.ts",
     "eval": "node eval/report.ts",
     "near-misses": "node eval/near-misses.ts",
@@ -19,5 +20,8 @@
     "esbuild": "^0.28.2",
     "playwright": "^1.65.1",
     "typescript": "^7.0.2"
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }

@@ -1,7 +1,7 @@
 // Offline replay: runs recorded traces through the baselines and scores them. Pure, so it runs in Node.
 
-import { predictForesightPoint, segmentIntersectsRect, type Rect, type TimedPoint } from "../src/baselines.ts";
-import { predictTargetProbabilities, type ModelWeights } from "../src/model.ts";
+import { predictForesightPoint, segmentIntersectsRect, type Rect, type TimedPoint } from "../packages/extension/src/baselines.ts";
+import { predictTargetProbabilities, type ModelWeights } from "../packages/beeline/src/model.ts";
 
 /** One recorded click, as stored by the content script (see docs/prd.md, Recording traces). v2 fields are optional. */
 export type Trace = {

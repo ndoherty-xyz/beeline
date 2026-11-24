@@ -1,4 +1,4 @@
-"""Train beeline's base model on recorded traces and export it for src/model.ts.
+"""Train beeline's base model on recorded traces and export it for packages/beeline/src/model.ts.
 
 Usage: uv run --project train train/train.py data/traces-<date>.jsonl [--adserp data/adserp-traces.jsonl] [--within-ms 650] [--out weights.json]
 
@@ -6,7 +6,7 @@ The model learns each target's chance of being clicked within --within-ms: a sof
 "no click by then" option, scored from the motion features alone. --adserp mixes in other people's traces from
 eval/convert-adserp.ts, holding out whole people.
 
-Writes src/model-weights.json (or --out) (gitignored: trained on personal movement), and test/model-fixture.json: synthetic
+Writes packages/beeline/src/model-weights.json (or --out) (gitignored: trained on personal movement), and test/model-fixture.json: synthetic
 traces and random weights with the scores Python gives them, which test/model.test.ts checks the TS model
 reproduces.
 """
@@ -202,7 +202,7 @@ def train(train_snapshots, train_labels, held_out_snapshots, held_out_labels):
 
 
 def export_weights(params, mean, std, trained_until, held_out_people, within_ms):
-    """Fold the standardisation into the hidden layer and none option and return weights in the src/model.ts format."""
+    """Fold the standardisation into the hidden layer and none option and return weights in the packages/beeline/src/model.ts format."""
     hidden_weights = params["hidden_weights"] / std
     none_weights = params["none_weights"] / std[:MOTION_FEATURE_COUNT]
     return {
@@ -249,7 +249,7 @@ def make_fixture_traces():
 
 
 def make_fixture_weights(feature_count):
-    """Make random weights in the src/model-weights.json format, so the fixture reveals nothing about the trained ones."""
+    """Make random weights in the model-weights.json format, so the fixture reveals nothing about the trained ones."""
     rng = np.random.default_rng(2)
     return {
         "trainedUntil": 0,
@@ -278,7 +278,7 @@ def main():
     parser.add_argument("traces")
     parser.add_argument("--adserp", help="also train on AdSERP traces, holding out whole people")
     parser.add_argument("--within-ms", type=int, default=650, help="learn each target's chance of a click within this many ms")
-    parser.add_argument("--out", default=REPO / "src/model-weights.json", type=Path)
+    parser.add_argument("--out", default=REPO / "packages/beeline/src/model-weights.json", type=Path)
     args = parser.parse_args()
 
     traces = load_traces(args.traces)

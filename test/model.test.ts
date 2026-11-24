@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { targetToRect, type Trace } from "../eval/replay.ts";
-import { predictTargetProbabilities, scoreTargets, type ModelWeights } from "../src/model.ts";
+import { predictTargetProbabilities, scoreTargets, type ModelWeights } from "../packages/beeline/src/model.ts";
 
 // Written by train/train.py: random weights, synthetic clicks, and what the Python model gives for them.
 const fixture: { weights: ModelWeights; traces: Trace[]; scores: number[][][]; probabilities: number[][][] } = JSON.parse(

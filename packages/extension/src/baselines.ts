@@ -1,10 +1,8 @@
 // Pure baseline predictors: no DOM, no chrome.*, so recorded traces can be replayed through them in Node.
 
-/** A cursor position in client coordinates, with a `performance.now()` timestamp in ms. */
-export type TimedPoint = { t: number; x: number; y: number };
+import type { Rect, TimedPoint } from "beeline";
 
-/** A viewport rectangle. A `DOMRect` satisfies it. */
-export type Rect = { left: number; top: number; right: number; bottom: number };
+export type { Rect, TimedPoint };
 
 // Foresight.js ----------
 // Port of the mouse rule from Foresight.js 4.3.0 (MIT, Bart Spaans, https://foresightjs.com), commit c7d8223,

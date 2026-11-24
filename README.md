@@ -4,6 +4,14 @@ beeline is a Chrome extension that predicts which element your cursor moves to. 
 
 beeline is a work in progress and a proof of concept. It is not on the Chrome Web Store.
 
+## Layout
+
+- `packages/beeline/`: the library. It tracks the cursor and the clickable elements on a page, and gives each
+  element's chance of being clicked in the next moment.
+- `packages/extension/`: the Chrome extension. It records click traces and draws the predictions over the page.
+- `eval/`: replays recorded traces through the model and the baselines.
+- `train/`: trains the model (Python).
+
 ## Run it
 
 The repo does not include trained weights, because the weights fit the cursor movement of one person.
@@ -13,16 +21,16 @@ Training needs [uv](https://docs.astral.sh/uv/).
 ### Load the extension
 
 1. Install the packages: `npm install`.
-2. Copy the random test weights to `src/model-weights.json`. The build needs a weights file:
+2. Copy the random test weights to `packages/beeline/src/model-weights.json`. The build needs a weights file:
 
    ```sh
-   node -e 'const fs = require("fs"); fs.writeFileSync("src/model-weights.json", JSON.stringify(JSON.parse(fs.readFileSync("test/model-fixture.json")).weights))'
+   node -e 'const fs = require("fs"); fs.writeFileSync("packages/beeline/src/model-weights.json", JSON.stringify(JSON.parse(fs.readFileSync("test/model-fixture.json")).weights))'
    ```
 
 3. Build the extension: `npm run build`.
 4. Open `chrome://extensions`.
 5. Turn on **Developer mode**.
-6. Click **Load unpacked** and select `dist/`.
+6. Click **Load unpacked** and select `packages/extension/dist/`.
 
 ### Record traces
 
@@ -35,11 +43,14 @@ More clicks give a better model. The current numbers below come from about 3,200
 
 ### Train the model
 
-1. Train the model: `npm run train -- data/<export>.jsonl`. This command writes `src/model-weights.json`.
+1. Train the model: `npm run train -- data/<export>.jsonl`. This command writes `packages/beeline/src/model-weights.json`.
 2. Build the extension again: `npm run build`.
 3. On `chrome://extensions`, click reload on the extension card.
 
 To rebuild after each code change, use `npm run watch`.
+
+To try the library without the extension, run `npm run playground` and open http://localhost:8123. The page uses
+each part of the API on cards, links and a toolbar, and shows the model's time per frame.
 
 In the popup, turn on **Show predictions** to outline the targets that a predictor fires on. You can select the
 model or [Foresight](https://foresightjs.com). The model fires on a target when its probability is more than a

@@ -6,6 +6,7 @@
   "scripts": {
     "build": "npm run build -w beeline-extension",
     "watch": "npm run watch -w beeline-extension",
+    "playground": "esbuild packages/beeline/playground/playground.ts --bundle --outdir=packages/beeline/playground/dist --servedir=packages/beeline/playground --serve=localhost:8123",
     "typecheck": "tsc && tsc -p packages/beeline",
     "test": "node --test test/*.test.ts",
     "eval": "node eval/report.ts",

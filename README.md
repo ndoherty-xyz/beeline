@@ -49,6 +49,9 @@ More clicks give a better model. The current numbers below come from about 3,200
 
 To rebuild after each code change, use `npm run watch`.
 
+To try the library without the extension, run `npm run playground` and open http://localhost:8123. The page uses
+each part of the API on cards, links and a toolbar, and shows the model's time per frame.
+
 In the popup, turn on **Show predictions** to outline the targets that a predictor fires on. You can select the
 model or [Foresight](https://foresightjs.com). The model fires on a target when its probability is more than a
 threshold. You set the threshold in the popup. The default is 80%. The popup can also show all targets.

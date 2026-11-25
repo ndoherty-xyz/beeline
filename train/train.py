@@ -151,50 +151,65 @@ def stack_batch(snapshots, labels):
     return inputs, group_sizes, np.concatenate(labels)
 
 
-def train(train_snapshots, train_labels, held_out_snapshots, held_out_labels):
-    """Fit the scorer with Adam on standardised inputs; returns params and the standardisation."""
+def train(train_snapshots, train_labels, held_out_snapshots=None, held_out_labels=None, start=None, trainable=None, steps=None, learning_rate=LEARNING_RATE):
+    """Fit the scorer with Adam on standardised inputs; returns params and the standardisation.
+
+    start is (params, mean, std) from an earlier fit to continue from, keeping its standardisation; trainable names the
+    params to update (default all); steps replaces the EPOCHS passes with a fixed number of batches. Held-out loss is
+    printed each epoch when held-out data is given.
+    """
     rng = np.random.default_rng(0)
-    all_inputs = np.concatenate([block.reshape(-1, block.shape[2]) for block in train_snapshots])
-    mean = all_inputs.mean(axis=0, dtype=np.float64)
-    std = np.maximum(all_inputs.std(axis=0, dtype=np.float64), 1e-6)
-    del all_inputs
+    if start:
+        params, mean, std = start
+        params = {name: value.copy() for name, value in params.items()}
+    else:
+        all_inputs = np.concatenate([block.reshape(-1, block.shape[2]) for block in train_snapshots])
+        mean = all_inputs.mean(axis=0, dtype=np.float64)
+        std = np.maximum(all_inputs.std(axis=0, dtype=np.float64), 1e-6)
+        del all_inputs
+        feature_count = train_snapshots[0].shape[2]
+        params = {
+            "hidden_weights": rng.normal(0, 1 / np.sqrt(feature_count), (HIDDEN_UNITS, feature_count)),
+            "hidden_biases": np.zeros(HIDDEN_UNITS),
+            "output_weights": rng.normal(0, 1 / np.sqrt(HIDDEN_UNITS), HIDDEN_UNITS),
+            "none_weights": np.zeros(MOTION_FEATURE_COUNT),
+            "none_bias": np.array(0.0),
+        }
     standardise = lambda block: ((block - mean) / std).astype(np.float32)
     train_snapshots = [standardise(block) for block in train_snapshots]
-    held_out = stack_batch([standardise(block) for block in held_out_snapshots], held_out_labels)
+    held_out = held_out_snapshots and stack_batch([standardise(block) for block in held_out_snapshots], held_out_labels)
+    trainable = trainable or list(params)
 
-    feature_count = train_snapshots[0].shape[2]
-    params = {
-        "hidden_weights": rng.normal(0, 1 / np.sqrt(feature_count), (HIDDEN_UNITS, feature_count)),
-        "hidden_biases": np.zeros(HIDDEN_UNITS),
-        "output_weights": rng.normal(0, 1 / np.sqrt(HIDDEN_UNITS), HIDDEN_UNITS),
-        "none_weights": np.zeros(MOTION_FEATURE_COUNT),
-        "none_bias": np.array(0.0),
-    }
-    first_moment = {name: np.zeros_like(value) for name, value in params.items()}
-    second_moment = {name: np.zeros_like(value) for name, value in params.items()}
+    first_moment = {name: np.zeros_like(params[name]) for name in trainable}
+    second_moment = {name: np.zeros_like(params[name]) for name in trainable}
+    batches_per_epoch = math.ceil(len(train_snapshots) / TRACES_PER_BATCH)
+    epochs = math.ceil(steps / batches_per_epoch) if steps else EPOCHS
     step = 0
-    for epoch in range(EPOCHS):
+    for epoch in range(epochs):
         order = rng.permutation(len(train_snapshots))
         losses = []
-        for start in range(0, len(order), TRACES_PER_BATCH):
-            batch = order[start : start + TRACES_PER_BATCH]
+        for start_index in range(0, len(order), TRACES_PER_BATCH):
+            if steps and step == steps:
+                break
+            batch = order[start_index : start_index + TRACES_PER_BATCH]
             inputs, group_sizes, labels = stack_batch([train_snapshots[i] for i in batch], [train_labels[i] for i in batch])
             loss, gradients, _ = compute_loss_and_gradients(params, inputs, group_sizes, labels)
             losses.append(loss)
             step += 1
-            for name, gradient in gradients.items():
-                gradient = gradient + WEIGHT_DECAY * params[name]
+            for name in trainable:
+                gradient = gradients[name] + WEIGHT_DECAY * params[name]
                 first_moment[name] = 0.9 * first_moment[name] + 0.1 * gradient
                 second_moment[name] = 0.999 * second_moment[name] + 0.001 * gradient**2
                 corrected_first = first_moment[name] / (1 - 0.9**step)
                 corrected_second = second_moment[name] / (1 - 0.999**step)
-                params[name] -= LEARNING_RATE * corrected_first / (np.sqrt(corrected_second) + 1e-8)
-        held_out_loss, _, held_out_metric = compute_loss_and_gradients(params, *held_out)
-        print(
-            f"epoch {epoch + 1:2d}: train loss {np.mean(losses):.3f}, "
-            f"held-out loss {held_out_loss:.3f}, held-out mean p of the clicked target within the window {held_out_metric:.1%}",
-            flush=True,
-        )
+                params[name] -= learning_rate * corrected_first / (np.sqrt(corrected_second) + 1e-8)
+        if held_out:
+            held_out_loss, _, held_out_metric = compute_loss_and_gradients(params, *held_out)
+            print(
+                f"epoch {epoch + 1:2d}: train loss {np.mean(losses):.3f}, "
+                f"held-out loss {held_out_loss:.3f}, held-out mean p of the clicked target within the window {held_out_metric:.1%}",
+                flush=True,
+            )
     return params, mean, std
 
 

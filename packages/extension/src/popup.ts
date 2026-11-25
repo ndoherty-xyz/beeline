@@ -1,4 +1,7 @@
-// Popup: prefetch switch for the current site, overlay and recording toggles, overlay options, device switch, trace count, export and clear.
+// Popup: prefetch switch for the current site, overlay and recording toggles, overlay options, device switch, which
+// weights are running, trace count, export and clear.
+
+import type { PersonalModel } from "./background.ts";
 
 const prefetchCheckbox = document.getElementById("prefetch") as HTMLInputElement;
 const prefetchSiteText = document.getElementById("prefetch-site")!;
@@ -9,6 +12,7 @@ const overlayTargetsSelect = document.getElementById("overlay-targets") as HTMLS
 const overlayThresholdInput = document.getElementById("overlay-threshold") as HTMLInputElement;
 const recordingCheckbox = document.getElementById("recording") as HTMLInputElement;
 const deviceSelect = document.getElementById("device") as HTMLSelectElement;
+const modelStatusText = document.getElementById("model-status")!;
 const traceCountText = document.getElementById("trace-count")!;
 const exportButton = document.getElementById("export")!;
 const clearButton = document.getElementById("clear")!;
@@ -68,6 +72,22 @@ prefetchCheckbox.addEventListener("change", async () => {
   const otherSites = (prefetchOffSites as string[]).filter((hostname) => hostname !== activeHostname);
   chrome.storage.local.set({ prefetchOffSites: prefetchCheckbox.checked ? otherSites : [...otherSites, activeHostname] });
 });
+
+// Model ----------
+
+/**
+ * Function to show whether the default or the personal weights are running, and how many clicks they learned from.
+ * @returns Nothing.
+ */
+async function showModelStatus(): Promise<void> {
+  const { personalModel } = (await chrome.storage.local.get("personalModel")) as { personalModel?: PersonalModel };
+  modelStatusText.textContent = personalModel
+    ? `Running personal weights, learned from ${personalModel.clickCount} clicks`
+    : "Running default weights; learns from your clicks after 100";
+}
+
+showModelStatus();
+chrome.storage.onChanged.addListener((changes) => changes.personalModel && showModelStatus());
 
 // Traces ----------
 

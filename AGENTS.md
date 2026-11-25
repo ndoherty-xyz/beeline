@@ -61,7 +61,8 @@ Training is Python (numpy, managed by uv in `train/`): `npm run train -- data/<e
 the committed `packages/beeline/src/default-weights.json` unless given `weights`; it's trained on AdSERP alone, and
 `npm run train -- data/<export>.jsonl --adserp data/adserp-traces.jsonl --default` rewrites it (the export only sets
 the held-out clicks, so `eval/finetune.ts` scores it on the same ones). `train/beeline_model.py` mirrors
-`packages/beeline/src/model.ts`; change both, then retrain so the fixture matches.
+`packages/beeline/src/model.ts`; change both, then retrain so the fixture matches. `packages/beeline/src/finetune.ts`
+mirrors `train()` fine-tuning the output layer, and `test/finetune-fixture.json` (also written by train) checks it.
 
 Public data: `npm run convert-adserp -- <unzipped AdSERP dir> data/adserp-traces.jsonl` turns the AdSERP dataset
 (Zenodo 15236546, CC BY 4.0) into traces from 47 other people, with a `person` field for holding people out. Download

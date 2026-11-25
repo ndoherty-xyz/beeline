@@ -16,7 +16,9 @@ from pathlib import Path
 
 from train import (
     ADSERP_HELD_OUT_PEOPLE,
+    FINE_TUNE_LEARNING_RATE,
     HELD_OUT_SHARE,
+    OUTPUT_LAYER,
     build_snapshots,
     export_weights,
     find_acquisitions,
@@ -27,9 +29,8 @@ from train import (
 )
 
 WITHIN_MS = 650
-FINE_TUNE_LEARNING_RATE = 1e-3
 TRAINABLE_BY_LAYERS = {
-    "output": ["output_weights", "none_weights", "none_bias"],
+    "output": OUTPUT_LAYER,
     "all": None,
 }
 

@@ -7,7 +7,8 @@ The model learns each target's chance of being clicked within --within-ms: a sof
 eval/convert-adserp.ts, holding out whole people. --default trains on AdSERP's people alone (the user's export still
 sets the held-out split) and writes packages/beeline/src/default-weights.json, the committed out-of-box model.
 
-Writes packages/beeline/src/model-weights.json (or --out) (gitignored: trained on personal movement), and test/model-fixture.json: synthetic
+Writes packages/beeline/src/model-weights.json (or --out) (gitignored: trained on personal movement), test/finetune-fixture.json
+(an output-layer fine-tune of random weights on synthetic clicks), and test/model-fixture.json: synthetic
 traces and random weights with the scores Python gives them, which test/model.test.ts checks the TS model
 reproduces.
 """
@@ -34,6 +35,12 @@ RETRY_GAP_MS = 1000
 ADSERP_HELD_OUT_PEOPLE = 10
 # AdSERP is one layout (search results on one screen size), so it gets only twice the weight of its click count.
 ADSERP_REPEATS = 2
+# The on-device update: the output layer and none option only, from the current weights (packages/beeline/src/finetune.ts).
+OUTPUT_LAYER = ["output_weights", "none_weights", "none_bias"]
+FINE_TUNE_LEARNING_RATE = 1e-3
+# Two batches per pass, so the fixture covers a partial batch and stopping mid-pass.
+FINE_TUNE_FIXTURE_CLICKS = 34
+FINE_TUNE_FIXTURE_STEPS = 21
 
 
 # Data ----------
@@ -230,17 +237,19 @@ def export_weights(params, mean, std, trained_until, held_out_people, within_ms)
         "withinMs": within_ms,
         "noneWeights": none_weights.tolist(),
         "noneBias": float(params["none_bias"] - none_weights @ mean[:MOTION_FEATURE_COUNT]),
+        "inputMean": mean.tolist(),
+        "inputStd": std.tolist(),
     }
 
 
-def make_fixture_traces():
+def make_fixture_traces(count=6):
     """Make synthetic clicks covering the feature code's branches, in the recorded trace format.
 
     Synthetic so that no real trace is committed.
     """
     rng = np.random.default_rng(1)
     traces = []
-    for index in range(6):
+    for index in range(count):
         targets = [[float(v) for v in np.round([rng.uniform(0, 1100), rng.uniform(0, 700), rng.uniform(4, 300), rng.uniform(4, 120)], 1)] for _ in range(12)]
         left, top, width, height = targets[0]
         targets.append([left + 2, top + 2, round(width / 3, 1), round(height / 3, 1)])  # nested inside target 0
@@ -276,6 +285,36 @@ def make_fixture_weights(feature_count):
         "withinMs": 650,
         "noneWeights": rng.normal(0, 1, MOTION_FEATURE_COUNT).tolist(),
         "noneBias": float(rng.normal(0, 1)),
+    }
+
+
+def make_fine_tune_fixture(feature_count):
+    """Fine-tune the output layer of random weights on synthetic clicks, as the extension does, for
+    test/finetune.test.ts. Holds the batch orders train() drew, since TS can't reproduce numpy's generator."""
+    traces = make_fixture_traces(FINE_TUNE_FIXTURE_CLICKS)
+    traces[3]["clicked"] = -1  # a click on nothing
+    rng = np.random.default_rng(3)
+    params = {
+        "hidden_weights": rng.normal(0, 1 / np.sqrt(feature_count), (HIDDEN_UNITS, feature_count)),
+        "hidden_biases": rng.normal(0, 0.5, HIDDEN_UNITS),
+        "output_weights": rng.normal(0, 1 / np.sqrt(HIDDEN_UNITS), HIDDEN_UNITS),
+        "none_weights": rng.normal(0, 1, MOTION_FEATURE_COUNT),
+        "none_bias": np.array(rng.normal(0, 1)),
+    }
+    mean = rng.normal(0, 1, feature_count)
+    std = rng.uniform(0.5, 2, feature_count)
+    snapshots, times = zip(*(build_snapshots(trace) for trace in traces))
+    labels = [label_snapshots(trace, snapshot_times, 650) for trace, snapshot_times in zip(traces, times)]
+    fitted = train(list(snapshots), labels, start=(params, mean, std), trainable=OUTPUT_LAYER, steps=FINE_TUNE_FIXTURE_STEPS, learning_rate=FINE_TUNE_LEARNING_RATE)
+    # train() draws one permutation per epoch from default_rng(0) and nothing else when given a start.
+    order_rng = np.random.default_rng(0)
+    epochs = math.ceil(FINE_TUNE_FIXTURE_STEPS / math.ceil(len(traces) / TRACES_PER_BATCH))
+    return {
+        "start": export_weights(params, mean, std, 0, [], 650),
+        "traces": traces,
+        "orders": [order_rng.permutation(len(traces)).tolist() for _ in range(epochs)],
+        "steps": FINE_TUNE_FIXTURE_STEPS,
+        "weights": export_weights(*fitted, 0, [], 650),
     }
 
 
@@ -344,7 +383,8 @@ def main():
         "probabilities": [probabilities for _, probabilities in fixture_outputs],
     }
     (REPO / "test/model-fixture.json").write_text(json.dumps(fixture) + "\n")
-    print(f"wrote {out} and test/model-fixture.json")
+    (REPO / "test/finetune-fixture.json").write_text(json.dumps(make_fine_tune_fixture(len(weights["hiddenWeights"][0]))) + "\n")
+    print(f"wrote {out}, test/model-fixture.json and test/finetune-fixture.json")
 
 
 if __name__ == "__main__":

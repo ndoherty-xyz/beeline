@@ -5,6 +5,7 @@
   "description": "Prefetches the link your cursor is heading for, so the next page opens sooner.",
   "permissions": ["storage", "unlimitedStorage", "activeTab"],
   "action": { "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

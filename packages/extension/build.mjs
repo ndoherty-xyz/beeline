@@ -4,7 +4,7 @@ import { cp, mkdir } from "node:fs/promises";
 import * as esbuild from "esbuild";
 
 const options = {
-  entryPoints: ["src/content.ts", "src/popup.ts"],
+  entryPoints: ["src/background.ts", "src/content.ts", "src/popup.ts"],
   bundle: true,
   outdir: "dist",
   format: "iife",

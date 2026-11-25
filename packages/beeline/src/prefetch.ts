@@ -1,12 +1,15 @@
 // Prefetch same-origin links before they're clicked, when beeline expects a click or the cursor rests on the link.
 
 import { createBeeline } from "./index.ts";
+import type { ModelWeights } from "./model.ts";
 
 export type PrefetchOptions = {
   /** The probability of a click within the next moment that prefetches a link. */
   prefetchAbove?: number;
   /** How long the cursor rests on a link before it's prefetched anyway, in ms. */
   hoverMs?: number;
+  /** Weights to run instead of the bundled default, as in `createBeeline`. */
+  weights?: ModelWeights;
 };
 
 // Words in a path or query that suggest opening the link does something, like signing out or emptying a cart.
@@ -58,10 +61,10 @@ function prefetchUrl(url: string): void {
 /**
  * Function to prefetch each same-origin link once, when beeline expects it to be clicked, the cursor rests on it, it
  * gets keyboard focus, or a touch starts on it. Covers links added later too.
- * @param options The threshold and the hover floor.
+ * @param options The threshold, the hover floor and the weights.
  * @returns A function that stops.
  */
-export function prefetchLinks({ prefetchAbove = 0.4, hoverMs = 100 }: PrefetchOptions = {}): () => void {
+export function prefetchLinks({ prefetchAbove = 0.4, hoverMs = 100, weights }: PrefetchOptions = {}): () => void {
   const prefetchedUrls = new Set<string>();
   const prefetchOnce = (link: HTMLAnchorElement) => {
     if (prefetchedUrls.has(link.href) || !isPrefetchable(link)) return;
@@ -69,7 +72,7 @@ export function prefetchLinks({ prefetchAbove = 0.4, hoverMs = 100 }: PrefetchOp
     prefetchUrl(link.href);
   };
 
-  const beeline = createBeeline({ cssVariable: false });
+  const beeline = createBeeline({ cssVariable: false, weights });
   beeline.onFrame(({ targetElements, probabilities }) => {
     probabilities.forEach((probability, index) => {
       const link = targetElements[index];

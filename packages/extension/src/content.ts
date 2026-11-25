@@ -5,7 +5,7 @@ import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame, type 
 import type { PersonalModel } from "./background.ts";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
-// Replaced once the settings load if the background has fine-tuned personal weights; new weights apply on the next page.
+// Replaced whenever the background fine-tunes personal weights.
 let personalWeights: ModelWeights | undefined;
 let beeline = createBeeline();
 
@@ -550,12 +550,24 @@ addEventListener("pagehide", () => checkPendingNavigation(performance.now(), tru
  */
 const isPrefetchOffHere = (prefetchOffSites: unknown) => ((prefetchOffSites as string[] | undefined) ?? []).includes(location.hostname);
 
-chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
-  personalWeights = (settings.personalModel as PersonalModel | undefined)?.weights;
-  if (personalWeights) {
-    beeline.destroy();
-    beeline = createBeeline({ weights: personalWeights });
+/**
+ * Function to run new weights on this page, restarting the overlay and prefetching on them if they're on.
+ * @param weights The personal weights from the background.
+ * @returns Nothing.
+ */
+function runPersonalWeights(weights: ModelWeights): void {
+  personalWeights = weights;
+  beeline.destroy();
+  beeline = createBeeline({ weights });
+  if (stopOverlayFrames) stopOverlayFrames = beeline.onFrame(drawOverlayFrame);
+  if (stopPrefetching) {
+    stopPrefetching();
+    stopPrefetching = prefetchLinks({ weights });
   }
+}
+
+chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
+  if (settings.personalModel) runPersonalWeights((settings.personalModel as PersonalModel).weights);
   setPrefetchEnabled(!isPrefetchOffHere(settings.prefetchOffSites));
   setOverlayEnabled(settings.overlay === true);
   overlaySettings.predictor = (settings.overlayPredictor as string | undefined) ?? "model";
@@ -566,6 +578,7 @@ chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overl
 });
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
+  if (changes.personalModel) runPersonalWeights((changes.personalModel.newValue as PersonalModel).weights);
   if (changes.prefetchOffSites) setPrefetchEnabled(!isPrefetchOffHere(changes.prefetchOffSites.newValue));
   if (changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
   if (changes.overlayPredictor) overlaySettings.predictor = changes.overlayPredictor.newValue as string;

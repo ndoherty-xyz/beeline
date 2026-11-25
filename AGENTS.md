@@ -3,8 +3,9 @@
 Start with [docs/prd.md](docs/prd.md): the concept, the design, and the milestones in order. Then
 [docs/results.md](docs/results.md): what the recorded data looks like and the current numbers.
 
-`packages/beeline/` is the library (core API in `src/index.ts`, the model in `src/model.ts`). `packages/extension/` is
-the Chrome extension, which imports the core as `beeline` through npm workspaces. `eval/`, `train/` and `test/` stay at
+`packages/extension/` is the Chrome extension, the product. `packages/beeline/` is its internal model and prefetch
+module (core API in `src/index.ts`, the model in `src/model.ts`, prefetching in `src/prefetch.ts`), imported as
+`beeline` through npm workspaces; it isn't published. `eval/`, `train/` and `test/` stay at
 the root and cover both.
 
 Traces are exported from the popup as JSONL. The current export is in `data/` (gitignored, never commit it).
@@ -42,6 +43,8 @@ Do not restate what the code says, and do not narrate a change. Git history cove
 - The overlay can switch between the model and Foresight, to compare how they feel in use. Numbers come only
   from offline comparisons over recorded traces, never from the extension.
 - Keep `packages/extension/src/baselines.ts` and `packages/beeline/src/model.ts` pure (no DOM, no `chrome.*`) so traces can be replayed through them in Node.
+- Prefetch only, never prerender, and same-origin only. Keep the skip rules in `prefetch.ts` (action-like URLs,
+  downloads, the current page, pages with their own speculation rules) and the per-site off switch.
 - Traces are geometry only. Never store URLs, page text, element contents or selectors.
 - Inference runs on the CPU in plain TypeScript. No WebGPU.
 

@@ -2,7 +2,7 @@
 // timing readout for the benchmark. Run with `npm run playground`.
 
 import { createBeeline } from "beeline";
-import weights from "beeline/model-weights.json";
+import weights from "beeline/default-weights.json";
 import { predictTargetProbabilities } from "../src/model.ts";
 
 const beeline = createBeeline();

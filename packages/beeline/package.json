@@ -6,6 +6,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./model-weights.json": "./src/model-weights.json"
+    "./default-weights.json": "./src/default-weights.json"
   }
 }

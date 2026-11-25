@@ -1,10 +1,11 @@
 """Train beeline's base model on recorded traces and export it for packages/beeline/src/model.ts.
 
-Usage: uv run --project train train/train.py data/traces-<date>.jsonl [--adserp data/adserp-traces.jsonl] [--within-ms 650] [--out weights.json]
+Usage: uv run --project train train/train.py data/traces-<date>.jsonl [--adserp data/adserp-traces.jsonl] [--default] [--within-ms 650] [--out weights.json]
 
 The model learns each target's chance of being clicked within --within-ms: a softmax over the targets plus a
 "no click by then" option, scored from the motion features alone. --adserp mixes in other people's traces from
-eval/convert-adserp.ts, holding out whole people.
+eval/convert-adserp.ts, holding out whole people. --default trains on AdSERP's people alone (the user's export still
+sets the held-out split) and writes packages/beeline/src/default-weights.json, the committed out-of-box model.
 
 Writes packages/beeline/src/model-weights.json (or --out) (gitignored: trained on personal movement), and test/model-fixture.json: synthetic
 traces and random weights with the scores Python gives them, which test/model.test.ts checks the TS model
@@ -292,9 +293,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("traces")
     parser.add_argument("--adserp", help="also train on AdSERP traces, holding out whole people")
+    parser.add_argument("--default", action="store_true", help="train on --adserp alone, for packages/beeline/src/default-weights.json")
     parser.add_argument("--within-ms", type=int, default=650, help="learn each target's chance of a click within this many ms")
-    parser.add_argument("--out", default=REPO / "packages/beeline/src/model-weights.json", type=Path)
+    parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.default and not args.adserp:
+        parser.error("--default needs --adserp")
+    out = args.out or REPO / f"packages/beeline/src/{'default' if args.default else 'model'}-weights.json"
 
     traces = load_traces(args.traces)
     acquisitions = find_acquisitions(traces)
@@ -307,15 +312,19 @@ def main():
     train_traces += [trace for trace in empty_clicks if trace["time"] <= trained_until]
     held_out_traces += [trace for trace in empty_clicks if trace["time"] > trained_until]
     print(f"plus {len(empty_clicks)} clicks on nothing, split at the same time")
+    if args.default:
+        train_traces = []
+        print("--default: training on none of them")
     held_out_people = []
     if args.adserp:
         adserp_acquisitions = find_acquisitions(load_traces(args.adserp))
         people = sorted({trace["person"] for trace in adserp_acquisitions})
         held_out_people = people[::5][:ADSERP_HELD_OUT_PEOPLE]  # every fifth person
         adserp_train = [trace for trace in adserp_acquisitions if trace["person"] not in held_out_people]
-        train_traces += adserp_train * ADSERP_REPEATS
+        repeats = 1 if args.default else ADSERP_REPEATS
+        train_traces += adserp_train * repeats
         held_out_traces += [trace for trace in adserp_acquisitions if trace["person"] in held_out_people]
-        print(f"plus AdSERP: training on {len(adserp_train)} clicks ({ADSERP_REPEATS}x), holding out {len(held_out_people)} people")
+        print(f"plus AdSERP: training on {len(adserp_train)} clicks ({repeats}x), holding out {len(held_out_people)} people")
 
     train_snapshots, train_times = zip(*(build_snapshots(trace) for trace in train_traces))
     held_out_snapshots, held_out_times = zip(*(build_snapshots(trace) for trace in held_out_traces))
@@ -324,7 +333,7 @@ def main():
     params, mean, std = train(list(train_snapshots), train_labels, list(held_out_snapshots), held_out_labels)
 
     weights = export_weights(params, mean, std, trained_until, held_out_people, args.within_ms)
-    args.out.write_text(json.dumps(weights) + "\n")
+    out.write_text(json.dumps(weights) + "\n")
     fixture_weights = make_fixture_weights(len(weights["hiddenWeights"][0]))
     fixture_traces = make_fixture_traces()
     fixture_outputs = [score_fixture_trace(fixture_weights, trace) for trace in fixture_traces]
@@ -335,7 +344,7 @@ def main():
         "probabilities": [probabilities for _, probabilities in fixture_outputs],
     }
     (REPO / "test/model-fixture.json").write_text(json.dumps(fixture) + "\n")
-    print(f"wrote {args.out} and test/model-fixture.json")
+    print(f"wrote {out} and test/model-fixture.json")
 
 
 if __name__ == "__main__":

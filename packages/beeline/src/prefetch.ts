@@ -9,14 +9,30 @@ export type PrefetchOptions = {
   hoverMs?: number;
 };
 
+// Words in a path or query that suggest opening the link does something, like signing out or emptying a cart.
+const ACTION_WORDS = /(?<![a-z])(log[-_]?out|sign[-_]?out|delete|remove|unsubscribe|cart|add|confirm|token)(?![a-z])/i;
+
 /**
- * Function to tell whether a link goes to another page on this site, so it's worth prefetching.
+ * Function to tell whether a URL is safe and worth prefetching from a page: another page on the same origin, whose
+ * path and query don't look like an action.
+ * @param url The link's URL.
+ * @param pageUrl The current page's URL.
+ * @returns True if the URL can be prefetched.
+ */
+export function isPrefetchableUrl(url: URL, pageUrl: URL): boolean {
+  const samePage = url.href.split("#")[0] === pageUrl.href.split("#")[0];
+  return url.origin === pageUrl.origin && /^https?:$/.test(url.protocol) && !samePage && !ACTION_WORDS.test(url.pathname + url.search);
+}
+
+/**
+ * Function to tell whether a link is worth prefetching: not a download, on a page without its own speculation rules,
+ * and to a prefetchable URL.
  * @param link The link.
- * @returns True for a same-origin http(s) link to another page that isn't a download.
+ * @returns True if the link can be prefetched.
  */
 function isPrefetchable(link: HTMLAnchorElement): boolean {
-  const samePage = link.href.split("#")[0] === location.href.split("#")[0];
-  return link.origin === location.origin && link.protocol.startsWith("http") && !samePage && !link.hasAttribute("download");
+  const pageHasOwnRules = document.querySelector('script[type="speculationrules"]:not([data-beeline])') !== null;
+  return !link.hasAttribute("download") && !pageHasOwnRules && isPrefetchableUrl(new URL(link.href), new URL(location.href));
 }
 
 /**
@@ -28,6 +44,7 @@ function prefetchUrl(url: string): void {
   if (HTMLScriptElement.supports?.("speculationrules")) {
     const rule = document.createElement("script");
     rule.type = "speculationrules";
+    rule.dataset.beeline = "";
     rule.textContent = JSON.stringify({ prefetch: [{ source: "list", urls: [url] }] });
     document.head.append(rule);
   } else {

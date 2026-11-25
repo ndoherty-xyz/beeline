@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "beeline",
   "version": "0.0.1",
-  "description": "Predicts which element your cursor is heading for, and learns how you move.",
-  "permissions": ["storage", "unlimitedStorage"],
+  "description": "Prefetches the link your cursor is heading for, so the next page opens sooner.",
+  "permissions": ["storage", "unlimitedStorage", "activeTab"],
   "action": { "default_popup": "popup.html" },
   "content_scripts": [
     {

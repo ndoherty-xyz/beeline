@@ -1,6 +1,7 @@
-// Content script: draws the overlay from the beeline core (or Foresight), and records traces.
+// Content script: prefetches the link you're heading for, draws the overlay from the beeline core (or Foresight), and
+// records traces.
 
-import { createBeeline, TARGET_SELECTOR, type BeelineFrame } from "beeline";
+import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame } from "beeline";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
 const beeline = createBeeline();
@@ -28,6 +29,23 @@ new MutationObserver((records) => {
  */
 function countMutations(from: number, to: number): number {
   return mutationCounts.reduce((sum, [t, count]) => (t > from && t <= to ? sum + count : sum), 0);
+}
+
+// Prefetch ----------
+
+let stopPrefetching: (() => void) | undefined;
+
+/**
+ * Function to start or stop prefetching links on this page.
+ * @param enabled Whether to prefetch.
+ * @returns Nothing.
+ */
+function setPrefetchEnabled(enabled: boolean): void {
+  if (enabled && !stopPrefetching) stopPrefetching = prefetchLinks();
+  else if (!enabled && stopPrefetching) {
+    stopPrefetching();
+    stopPrefetching = undefined;
+  }
 }
 
 // Overlay ----------
@@ -520,7 +538,15 @@ addEventListener("pagehide", () => checkPendingNavigation(performance.now(), tru
 
 // Settings ----------
 
-chrome.storage.local.get(["overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
+/**
+ * Function to tell whether the popup turned prefetching off for this site.
+ * @param prefetchOffSites The stored hostnames with prefetching off.
+ * @returns True if this page's hostname is among them.
+ */
+const isPrefetchOffHere = (prefetchOffSites: unknown) => ((prefetchOffSites as string[] | undefined) ?? []).includes(location.hostname);
+
+chrome.storage.local.get(["prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
+  setPrefetchEnabled(!isPrefetchOffHere(settings.prefetchOffSites));
   setOverlayEnabled(settings.overlay === true);
   overlaySettings.predictor = (settings.overlayPredictor as string | undefined) ?? "model";
   overlaySettings.showAllTargets = settings.overlayTargets === "all";
@@ -530,6 +556,7 @@ chrome.storage.local.get(["overlay", "overlayPredictor", "overlayTargets", "over
 });
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
+  if (changes.prefetchOffSites) setPrefetchEnabled(!isPrefetchOffHere(changes.prefetchOffSites.newValue));
   if (changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
   if (changes.overlayPredictor) overlaySettings.predictor = changes.overlayPredictor.newValue as string;
   if (changes.overlayTargets) overlaySettings.showAllTargets = changes.overlayTargets.newValue === "all";

@@ -1,9 +1,11 @@
-// Content script: draws the overlay from the beeline core (or Foresight), and records traces.
+// Content script: prefetches the link you're heading for, draws the overlay from the beeline core (or Foresight), and
+// records traces.
 
-import { createBeeline, TARGET_SELECTOR, type BeelineFrame } from "beeline";
+import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame } from "beeline";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
 const beeline = createBeeline();
+prefetchLinks();
 
 // Mutations ----------
 

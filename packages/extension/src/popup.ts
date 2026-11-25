@@ -1,5 +1,7 @@
-// Popup: overlay and recording toggles, overlay options, device switch, trace count, export and clear.
+// Popup: prefetch switch for the current site, overlay and recording toggles, overlay options, device switch, trace count, export and clear.
 
+const prefetchCheckbox = document.getElementById("prefetch") as HTMLInputElement;
+const prefetchSiteText = document.getElementById("prefetch-site")!;
 const overlayCheckbox = document.getElementById("overlay") as HTMLInputElement;
 const overlayOptions = document.getElementById("overlay-options") as HTMLFieldSetElement;
 const overlayPredictorSelect = document.getElementById("overlay-predictor") as HTMLSelectElement;
@@ -46,6 +48,26 @@ overlayThresholdInput.addEventListener("change", () => {
 });
 recordingCheckbox.addEventListener("change", () => chrome.storage.local.set({ recording: recordingCheckbox.checked }));
 deviceSelect.addEventListener("change", () => chrome.storage.local.set({ device: deviceSelect.value }));
+
+// Prefetch ----------
+
+// The active tab's hostname, readable through activeTab while the popup is open. Pages like chrome:// have none.
+let activeHostname: string | undefined;
+
+Promise.all([chrome.tabs.query({ active: true, currentWindow: true }), chrome.storage.local.get("prefetchOffSites")]).then(
+  ([[activeTab], { prefetchOffSites = [] }]) => {
+    const activeTabUrl = URL.parse(activeTab?.url ?? "");
+    activeHostname = activeTabUrl && /^https?:$/.test(activeTabUrl.protocol) ? activeTabUrl.hostname : undefined;
+    prefetchSiteText.textContent = activeHostname ?? "this page";
+    prefetchCheckbox.disabled = !activeHostname;
+    prefetchCheckbox.checked = !!activeHostname && !(prefetchOffSites as string[]).includes(activeHostname);
+  },
+);
+prefetchCheckbox.addEventListener("change", async () => {
+  const { prefetchOffSites = [] } = await chrome.storage.local.get("prefetchOffSites");
+  const otherSites = (prefetchOffSites as string[]).filter((hostname) => hostname !== activeHostname);
+  chrome.storage.local.set({ prefetchOffSites: prefetchCheckbox.checked ? otherSites : [...otherSites, activeHostname] });
+});
 
 // Traces ----------
 

@@ -14,23 +14,17 @@ beeline is a work in progress and a proof of concept. It is not on the Chrome We
 
 ## Run it
 
-The repo does not include trained weights, because the weights fit the cursor movement of one person.
-You record your own traces with the extension, then you train a model on them.
-Training needs [uv](https://docs.astral.sh/uv/).
+The extension runs default weights, `packages/beeline/src/default-weights.json`, trained on other people's cursor
+movement from the public AdSERP dataset. You can also record your own traces with the extension and train a model on
+them. Training needs [uv](https://docs.astral.sh/uv/).
 
 ### Load the extension
 
 1. Install the packages: `npm install`.
-2. Copy the random test weights to `packages/beeline/src/model-weights.json`. The build needs a weights file:
-
-   ```sh
-   node -e 'const fs = require("fs"); fs.writeFileSync("packages/beeline/src/model-weights.json", JSON.stringify(JSON.parse(fs.readFileSync("test/model-fixture.json")).weights))'
-   ```
-
-3. Build the extension: `npm run build`.
-4. Open `chrome://extensions`.
-5. Turn on **Developer mode**.
-6. Click **Load unpacked** and select `packages/extension/dist/`.
+2. Build the extension: `npm run build`.
+3. Open `chrome://extensions`.
+4. Turn on **Developer mode**.
+5. Click **Load unpacked** and select `packages/extension/dist/`.
 
 ### Record traces
 
@@ -43,9 +37,9 @@ More clicks give a better model. The current numbers below come from about 3,200
 
 ### Train the model
 
-1. Train the model: `npm run train -- data/<export>.jsonl`. This command writes `packages/beeline/src/model-weights.json`.
-2. Build the extension again: `npm run build`.
-3. On `chrome://extensions`, click reload on the extension card.
+Train the model: `npm run train -- data/<export>.jsonl`. This command writes `packages/beeline/src/model-weights.json`,
+which `npm run eval` scores. The extension does not run these weights yet: it runs the default until it can adapt
+to you on-device.
 
 To rebuild after each code change, use `npm run watch`.
 

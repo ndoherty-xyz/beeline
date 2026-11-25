@@ -14,6 +14,8 @@ export type BeelineOptions = {
   targets?: string;
   /** The custom property written on watched elements with their probability, or false for none. */
   cssVariable?: string | false;
+  /** Weights to run instead of the bundled default, which is trained on other people (AdSERP), such as weights fitted to this user. */
+  weights?: ModelWeights;
 };
 
 /** One frame of predictions: every visible target, its rectangle and its probability, at the same indexes. */
@@ -27,10 +29,10 @@ const SAMPLE_WINDOW_MS = 1000;
 /**
  * Function to set up beeline. Nothing is tracked, and the model isn't loaded, until an element is watched, and
  * nothing ever is during server-side rendering or on touch-only devices, where there's no cursor to follow.
- * @param options Which elements count as targets, and the CSS variable to write.
+ * @param options Which elements count as targets, the CSS variable to write, and the weights to run.
  * @returns Functions to watch elements, read the targets, and stop.
  */
-export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beeline-p" }: BeelineOptions = {}) {
+export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beeline-p", weights }: BeelineOptions = {}) {
   const canTrack = typeof window !== "undefined" && matchMedia("(any-pointer: fine)").matches;
 
   // Targets ----------
@@ -159,8 +161,6 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
   // with the targets once they move.
   let lastScrollTime = -Infinity;
   let frameRequest: number | undefined;
-  // Loaded the first time tracking starts, so pages that never watch anything don't download it.
-  let weights: ModelWeights | undefined;
   let listening: AbortController | undefined;
   let mutationObserver: MutationObserver | undefined;
 
@@ -189,7 +189,8 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
     if (listening || !canTrack) return;
     listening = new AbortController();
     const listenerOptions = { capture: true, passive: true, signal: listening.signal };
-    if (!weights) import("./model-weights.json").then((module) => (weights = module.default as ModelWeights));
+    // Loaded the first time tracking starts, so pages that never watch anything don't download it.
+    if (!weights) import("./default-weights.json").then((module) => (weights = module.default as ModelWeights));
     targetRectsStale = true;
     mutationObserver = new MutationObserver(() => (targetRectsStale = true));
     mutationObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true });

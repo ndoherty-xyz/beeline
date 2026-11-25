@@ -57,7 +57,10 @@ Tests use `node --test`; Node 22.18+ runs `.ts` tests directly.
 
 Training is Python (numpy, managed by uv in `train/`): `npm run train -- data/<export>.jsonl` rewrites
 `packages/beeline/src/model-weights.json` (gitignored: it's fitted to personal movement, never commit it) and
-`test/model-fixture.json` (random weights, so the parity test needs no trained model) together. `train/beeline_model.py` mirrors
+`test/model-fixture.json` (random weights, so the parity test needs no trained model) together. `createBeeline` runs
+the committed `packages/beeline/src/default-weights.json` unless given `weights`; it's trained on AdSERP alone, and
+`npm run train -- data/<export>.jsonl --adserp data/adserp-traces.jsonl --default` rewrites it (the export only sets
+the held-out clicks, so `eval/finetune.ts` scores it on the same ones). `train/beeline_model.py` mirrors
 `packages/beeline/src/model.ts`; change both, then retrain so the fixture matches.
 
 Public data: `npm run convert-adserp -- <unzipped AdSERP dir> data/adserp-traces.jsonl` turns the AdSERP dataset

@@ -2,9 +2,8 @@
 
 import { createBeeline, TARGET_SELECTOR, type BeelineFrame } from "beeline";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
-import modelWeights from "beeline/model-weights.json";
 
-const beeline = createBeeline({ weights: modelWeights });
+const beeline = createBeeline();
 
 // Mutations ----------
 

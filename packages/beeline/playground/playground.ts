@@ -5,7 +5,7 @@ import { createBeeline } from "beeline";
 import weights from "beeline/model-weights.json";
 import { predictTargetProbabilities } from "../src/model.ts";
 
-const beeline = createBeeline({ weights });
+const beeline = createBeeline();
 
 // Page ----------
 

@@ -7,9 +7,9 @@ import { TARGET_SELECTOR } from "./targets.ts";
 
 export type { ModelWeights, Rect, TimedPoint };
 export { TARGET_SELECTOR };
+export { prefetchLinks, type PrefetchOptions } from "./prefetch.ts";
 
 export type BeelineOptions = {
-  weights: ModelWeights;
   /** Which elements count as targets. The model compares every target with the others, so this should cover all clickable elements. */
   targets?: string;
   /** The custom property written on watched elements with their probability, or false for none. */
@@ -25,12 +25,12 @@ export type ProbabilityCallback = (probability: number) => void;
 const SAMPLE_WINDOW_MS = 1000;
 
 /**
- * Function to set up beeline. Nothing is tracked until an element is watched, and nothing ever is during server-side
- * rendering or on touch-only devices, where there's no cursor to follow.
- * @param options The weights, which elements count as targets, and the CSS variable to write.
+ * Function to set up beeline. Nothing is tracked, and the model isn't loaded, until an element is watched, and
+ * nothing ever is during server-side rendering or on touch-only devices, where there's no cursor to follow.
+ * @param options Which elements count as targets, and the CSS variable to write.
  * @returns Functions to watch elements, read the targets, and stop.
  */
-export function createBeeline({ weights, targets = TARGET_SELECTOR, cssVariable = "--beeline-p" }: BeelineOptions) {
+export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beeline-p" }: BeelineOptions = {}) {
   const canTrack = typeof window !== "undefined" && matchMedia("(any-pointer: fine)").matches;
 
   // Targets ----------
@@ -51,8 +51,10 @@ export function createBeeline({ weights, targets = TARGET_SELECTOR, cssVariable 
       targetRectsStale = false;
       targetElements = [];
       targetRects = [];
-      const unmatchedWatched = [...watchedElements.keys()].filter((element) => !element.matches(targets));
-      for (const element of [...document.querySelectorAll(targets), ...unmatchedWatched]) {
+      // While a modal dialog is open, the page behind it can't be clicked.
+      const clickableRoot = document.querySelector("dialog:modal") ?? document.documentElement;
+      const unmatchedWatched = [...watchedElements.keys()].filter((element) => !element.matches(targets) && clickableRoot.contains(element));
+      for (const element of [...clickableRoot.querySelectorAll(targets), ...unmatchedWatched]) {
         const rect = element.getBoundingClientRect();
         const onScreen = rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
         if (onScreen && rect.width > 0 && rect.height > 0) {
@@ -157,6 +159,8 @@ export function createBeeline({ weights, targets = TARGET_SELECTOR, cssVariable 
   // with the targets once they move.
   let lastScrollTime = -Infinity;
   let frameRequest: number | undefined;
+  // Loaded the first time tracking starts, so pages that never watch anything don't download it.
+  let weights: ModelWeights | undefined;
   let listening: AbortController | undefined;
   let mutationObserver: MutationObserver | undefined;
 
@@ -166,6 +170,7 @@ export function createBeeline({ weights, targets = TARGET_SELECTOR, cssVariable 
    */
   function runModelFrame(): void {
     frameRequest = undefined;
+    if (!weights) return;
     const history = pointerSamples.filter((sample) => sample.t > lastScrollTime);
     if (history.length === 0) return;
     const { targetElements, targetRects } = measureTargets();
@@ -184,6 +189,7 @@ export function createBeeline({ weights, targets = TARGET_SELECTOR, cssVariable 
     if (listening || !canTrack) return;
     listening = new AbortController();
     const listenerOptions = { capture: true, passive: true, signal: listening.signal };
+    if (!weights) import("./model-weights.json").then((module) => (weights = module.default as ModelWeights));
     targetRectsStale = true;
     mutationObserver = new MutationObserver(() => (targetRectsStale = true));
     mutationObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true });

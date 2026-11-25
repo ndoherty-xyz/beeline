@@ -38,8 +38,9 @@ More clicks give a better model. The current numbers below come from about 3,200
 ### Train the model
 
 Train the model: `npm run train -- data/<export>.jsonl`. This command writes `packages/beeline/src/model-weights.json`,
-which `npm run eval` scores. The extension does not run these weights yet: it runs the default until it can adapt
-to you on-device.
+which `npm run eval` scores. The extension does not run these weights. It runs the default until you have 100 clicks,
+then fine-tunes its output layer on-device every 100 clicks, and open pages switch to the new weights. The popup shows
+which weights are running.
 
 To rebuild after each code change, use `npm run watch`.
 

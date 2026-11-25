@@ -1,10 +1,13 @@
 // Content script: prefetches the link you're heading for, draws the overlay from the beeline core (or Foresight), and
 // records traces.
 
-import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame } from "beeline";
+import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame, type ModelWeights } from "beeline";
+import type { PersonalModel } from "./background.ts";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
-const beeline = createBeeline();
+// Replaced whenever the background fine-tunes personal weights.
+let personalWeights: ModelWeights | undefined;
+let beeline = createBeeline();
 
 // Mutations ----------
 
@@ -41,7 +44,7 @@ let stopPrefetching: (() => void) | undefined;
  * @returns Nothing.
  */
 function setPrefetchEnabled(enabled: boolean): void {
-  if (enabled && !stopPrefetching) stopPrefetching = prefetchLinks();
+  if (enabled && !stopPrefetching) stopPrefetching = prefetchLinks({ weights: personalWeights });
   else if (!enabled && stopPrefetching) {
     stopPrefetching();
     stopPrefetching = undefined;
@@ -392,7 +395,7 @@ function scheduleOutcomeMeasurement(pending: PendingOutcome): void {
 addEventListener(
   "pointerdown",
   (event) => {
-    if (!recordingEnabled || !event.isTrusted || event.pointerType !== "mouse" || event.button !== 0) return;
+    if (!event.isTrusted || event.pointerType !== "mouse" || event.button !== 0) return;
     checkPendingNavigation(event.timeStamp, true);
     const { targetElements, targetRects } = beeline.measureTargets();
     // -1 when the click hit no target, e.g. a near miss.
@@ -484,7 +487,9 @@ addEventListener(
         };
       }
     }
-    chrome.storage.local.set({ [`trace:${time}:${id}`]: trace });
+    // Kept for fine-tuning either way; only recorded clicks are exported, and get an outcome.
+    chrome.storage.local.set({ [`${recordingEnabled ? "trace" : "training"}:${time}:${id}`]: trace });
+    if (!recordingEnabled) return;
 
     pendingOutcome = {
       id,
@@ -545,7 +550,24 @@ addEventListener("pagehide", () => checkPendingNavigation(performance.now(), tru
  */
 const isPrefetchOffHere = (prefetchOffSites: unknown) => ((prefetchOffSites as string[] | undefined) ?? []).includes(location.hostname);
 
-chrome.storage.local.get(["prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
+/**
+ * Function to run new weights on this page, restarting the overlay and prefetching on them if they're on.
+ * @param weights The personal weights from the background.
+ * @returns Nothing.
+ */
+function runPersonalWeights(weights: ModelWeights): void {
+  personalWeights = weights;
+  beeline.destroy();
+  beeline = createBeeline({ weights });
+  if (stopOverlayFrames) stopOverlayFrames = beeline.onFrame(drawOverlayFrame);
+  if (stopPrefetching) {
+    stopPrefetching();
+    stopPrefetching = prefetchLinks({ weights });
+  }
+}
+
+chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
+  if (settings.personalModel) runPersonalWeights((settings.personalModel as PersonalModel).weights);
   setPrefetchEnabled(!isPrefetchOffHere(settings.prefetchOffSites));
   setOverlayEnabled(settings.overlay === true);
   overlaySettings.predictor = (settings.overlayPredictor as string | undefined) ?? "model";
@@ -556,6 +578,7 @@ chrome.storage.local.get(["prefetchOffSites", "overlay", "overlayPredictor", "ov
 });
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
+  if (changes.personalModel) runPersonalWeights((changes.personalModel.newValue as PersonalModel).weights);
   if (changes.prefetchOffSites) setPrefetchEnabled(!isPrefetchOffHere(changes.prefetchOffSites.newValue));
   if (changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
   if (changes.overlayPredictor) overlaySettings.predictor = changes.overlayPredictor.newValue as string;

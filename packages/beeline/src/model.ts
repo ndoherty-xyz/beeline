@@ -24,6 +24,9 @@ export type ModelWeights = {
   /** The none option's score: a linear function of the motion features. */
   noneWeights: number[];
   noneBias: number;
+  /** The feature standardisation the weights were trained with (already folded in above), for fine-tuning. */
+  inputMean: number[];
+  inputStd: number[];
 };
 
 // Features ----------

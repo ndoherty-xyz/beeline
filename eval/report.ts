@@ -10,7 +10,9 @@ import {
   findEmptyClicksWithoutRetry,
   isAcquisition,
   isLinkNavigation,
-  replayForesight,
+  pickQuantile,
+  scoreModelAtForesight,
+  computeTopOneAccuracy,
   replayModel,
   samplesSinceLastScroll,
   targetToRect,
@@ -20,17 +22,6 @@ import {
   type PredictorScore,
   type Trace,
 } from "./replay.ts";
-
-/**
- * Function to pick a value at a quantile of a list.
- * @param values The values.
- * @param quantile Between 0 and 1.
- * @returns The value at that quantile, or NaN for an empty list.
- */
-function pickQuantile(values: number[], quantile: number): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] ?? NaN;
-}
 
 // Assumed costs, to turn lead time and wasted fires into time saved and bandwidth spent.
 // How long a page takes to arrive once requested: a fast site, a typical one, a slow one.
@@ -91,25 +82,13 @@ function printBaselineTable(title: string, traces: Trace[], toFetchKeys = fetchK
 function printModelTable(title: string, replays: { trace: Trace; frames: ModelFrame[] }[], toFetchKeys = fetchKeysByTarget): void {
   const traces = replays.map(({ trace }) => trace);
   printBaselineTable(title, traces, toFetchKeys);
-  const foresight = scorePredictor(traces, replayForesight, toFetchKeys);
-  const modelScores = Array.from({ length: 99 }, (_, index) => (index + 1) / 100).map((threshold) => ({
-    threshold,
-    score: scoreModelAtThreshold(replays, threshold, toFetchKeys),
-  }));
-  const atPrecision = modelScores.find(({ score }) => score.hits / score.fires >= foresight.hits / foresight.fires);
-  // Lead isn't monotonic at high thresholds, where a few clicks fire, so stop at the first that falls short.
-  const firstShortOfLead = modelScores.findIndex(({ score }) => !(pickQuantile(score.leadTimesMs, 0.5) >= pickQuantile(foresight.leadTimesMs, 0.5)));
-  const atLead = modelScores[(firstShortOfLead === -1 ? modelScores.length : firstShortOfLead) - 1];
+  const { atPrecision, atLead } = scoreModelAtForesight(replays, toFetchKeys);
   if (atPrecision) console.log(formatScoreRow(`model, p ≥ ${atPrecision.threshold} (Foresight's precision)`, atPrecision.score));
   if (atLead) console.log(formatScoreRow(`model, p ≥ ${atLead.threshold} (Foresight's lead)`, atLead.score));
 
   const top1 = [300, 200, 100].map((msBefore) => {
-    const frames = replays.flatMap(({ trace, frames }) => {
-      const frame = frames.findLast(({ t }) => t <= -msBefore);
-      return frame ? [{ trace, probabilities: frame.probabilities }] : [];
-    });
-    const correct = frames.filter(({ trace, probabilities }) => probabilities.indexOf(Math.max(...probabilities)) === trace.clicked);
-    return `${msBefore} ms ${Math.round((correct.length / frames.length) * 100)}% (${frames.length})`;
+    const { correct, frames } = computeTopOneAccuracy(replays, msBefore);
+    return `${msBefore} ms ${Math.round((correct / frames) * 100)}% (${frames})`;
   });
   console.log(`\nModel top-1 before the click (clicks with a frame by then): ${top1.join(", ")}`);
 }

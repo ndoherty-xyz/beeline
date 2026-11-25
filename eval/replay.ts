@@ -263,6 +263,56 @@ export function scoreModelAtThreshold(
   return score;
 }
 
+/**
+ * Function to pick a value at a quantile of a list.
+ * @param values The values.
+ * @param quantile Between 0 and 1.
+ * @returns The value at that quantile, or NaN for an empty list.
+ */
+export function pickQuantile(values: number[], quantile: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] ?? NaN;
+}
+
+/**
+ * Function to score the model at the thresholds that match Foresight on the same clicks: the lowest that reaches
+ * Foresight's precision, and the highest that keeps Foresight's median lead time.
+ * @param replays Each click with its model frames.
+ * @param toFetchKeys Which targets share a fetch (-1: never fetched).
+ * @returns The two thresholds with the model's totals there, either missing if none qualifies.
+ */
+export function scoreModelAtForesight(replays: { trace: Trace; frames: ModelFrame[] }[], toFetchKeys = fetchKeysByTarget) {
+  const foresight = scorePredictor(
+    replays.map(({ trace }) => trace),
+    replayForesight,
+    toFetchKeys,
+  );
+  const modelScores = Array.from({ length: 99 }, (_, index) => (index + 1) / 100).map((threshold) => ({
+    threshold,
+    score: scoreModelAtThreshold(replays, threshold, toFetchKeys),
+  }));
+  const atPrecision = modelScores.find(({ score }) => score.hits / score.fires >= foresight.hits / foresight.fires);
+  // Lead isn't monotonic at high thresholds, where a few clicks fire, so stop at the first that falls short.
+  const firstShortOfLead = modelScores.findIndex(({ score }) => !(pickQuantile(score.leadTimesMs, 0.5) >= pickQuantile(foresight.leadTimesMs, 0.5)));
+  const atLead = modelScores[(firstShortOfLead === -1 ? modelScores.length : firstShortOfLead) - 1];
+  return { foresight, atPrecision, atLead };
+}
+
+/**
+ * Function to count how often the model's most likely target is the clicked one at a time before the click.
+ * @param replays Each click with its model frames.
+ * @param msBefore How long before the click.
+ * @returns Clicks with a frame by then, and how many of those had the clicked target on top.
+ */
+export function computeTopOneAccuracy(replays: { trace: Trace; frames: ModelFrame[] }[], msBefore: number): { frames: number; correct: number } {
+  const frames = replays.flatMap(({ trace, frames }) => {
+    const frame = frames.findLast(({ t }) => t <= -msBefore);
+    return frame ? [{ trace, probabilities: frame.probabilities }] : [];
+  });
+  const correct = frames.filter(({ trace, probabilities }) => probabilities.indexOf(Math.max(...probabilities)) === trace.clicked);
+  return { frames: frames.length, correct: correct.length };
+}
+
 // Near misses ----------
 
 /** A click on empty space followed by a click on a nearby target, measured on that target's rect at the miss. */

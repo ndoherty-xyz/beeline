@@ -1,6 +1,5 @@
-# beeline
-
-<!-- Wordmark goes here. -->
+<p align="center"><img src="packages/extension/static/icons/icon-128.png" width="96" alt="" /></p>
+<h1 align="center">beeline</h1>
 
 beeline is a Chrome extension that prefetches the link your cursor is heading for, so the next page opens sooner. It
 works on any site from install, with default weights trained on other people's cursor movement. Then it learns how you

@@ -34,6 +34,8 @@
       .time-saved .label { color: var(--muted); font-size: 12px; }
       #time-saved { font-size: 36px; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
       #pages-saved { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .notice { margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 10%, var(--background)); }
+      .notice .title { font-weight: 600; }
       .card { border: 1px solid var(--line); border-radius: 10px; }
       .row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
       .row + .row { border-top: 1px solid var(--line); }
@@ -96,6 +98,10 @@
       <span class="label">Time saved</span>
       <span id="time-saved">0 ms</span>
       <span id="pages-saved">0 pages</span>
+    </section>
+    <section class="notice" id="preloading-notice" hidden>
+      <span class="title">Chrome's page preloading is off</span>
+      <span class="sub" id="preloading-detail"></span>
     </section>
     <section class="card">
       <label class="row">

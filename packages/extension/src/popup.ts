@@ -77,6 +77,26 @@ prefetchCheckbox.addEventListener("change", async () => {
   chrome.storage.local.set({ prefetchOffSites: prefetchCheckbox.checked ? otherSites : [...otherSites, activeHostname] });
 });
 
+// Chrome ignores prefetches while its page preloading is off, which some extensions do.
+const preloadingNotice = document.getElementById("preloading-notice")!;
+const preloadingDetailText = document.getElementById("preloading-detail")!;
+
+/**
+ * Function to warn when Chrome's page preloading is off, and say what turned it off.
+ * @param setting Chrome's network prediction setting.
+ * @returns Nothing.
+ */
+function showPreloadingNotice({ value, levelOfControl }: chrome.types.ChromeSettingGetResult<boolean>): void {
+  preloadingNotice.hidden = value;
+  preloadingDetailText.textContent =
+    levelOfControl === "controlled_by_other_extensions"
+      ? "Another extension turned it off, so nothing gets prefetched. Look for a prefetching option in your other extensions."
+      : "Nothing gets prefetched until Preload pages is on in Chrome's settings, under Performance.";
+}
+
+chrome.privacy.network.networkPredictionEnabled.get({}, showPreloadingNotice);
+chrome.privacy.network.networkPredictionEnabled.onChange.addListener(showPreloadingNotice);
+
 // Model ----------
 
 /**

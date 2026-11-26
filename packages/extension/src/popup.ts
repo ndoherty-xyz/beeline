@@ -192,12 +192,13 @@ exportButton.addEventListener("click", async () => {
 // Time saved ----------
 
 /**
- * Function to write a duration the way the popup shows it: tenths of a second under 10 s, then seconds, minutes and
- * hours.
+ * Function to write a duration the way the popup shows it: milliseconds under 1 s, tenths of a second under 10 s,
+ * then seconds, minutes and hours.
  * @param durationMs The duration in ms.
  * @returns The formatted duration.
  */
 function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${Math.floor(durationMs)} ms`;
   const seconds = durationMs / 1000;
   if (seconds < 10) return `${seconds.toFixed(1)} s`;
   if (seconds < 60) return `${Math.floor(seconds)} s`;

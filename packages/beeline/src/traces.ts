@@ -8,7 +8,8 @@ export const RETRY_GAP_MS = 1000;
 /** One recorded click, as stored by the content script (see docs/prd.md, Recording traces). v2 fields are optional. */
 export type Trace = {
   time: number;
-  device: "mouse" | "trackpad";
+  /** Set from a popup switch until v0.1.0; later traces leave it out. */
+  device?: "mouse" | "trackpad";
   viewport: [number, number];
   /** [ms before click, x, y, predictedX, predictedY, foresightFrame, scrollX, scrollY], oldest first. v1 has no scroll columns. */
   samples: [number, number, number, number, number, 0 | 1, number?, number?][];

@@ -1,4 +1,5 @@
-# beeline
+<p align="center"><img src="packages/extension/static/icons/icon-128.png" width="96" alt="" /></p>
+<h1 align="center">beeline</h1>
 
 beeline is a Chrome extension that prefetches the link your cursor is heading for, so the next page opens sooner. It
 works on any site from install, with default weights trained on other people's cursor movement. Then it learns how you
@@ -34,13 +35,18 @@ To compare the model with [Foresight](https://foresightjs.com), turn on **Show p
 
 Everything stays in `chrome.storage.local` in your browser. Nothing is sent anywhere.
 
-- `trace:` and `outcome:` records: one per click, while **Record clicks** is on. You can export them as JSONL or clear
-  them from the popup.
-- `training:` records: clicks while recording is off, kept for fine-tuning only. They are never exported.
+- `trace:` and `outcome:` records: one per click. You can export them as JSONL under **Advanced**.
+- `training:` records: clicks from versions before 0.1.0 made while recording was off, kept for fine-tuning only. They are never exported.
 - `personalModel`: your fine-tuned weights.
+- `timeSaved`: the time prefetching saved. For each prefetched page you open, that's how long its prefetch took to its
+  first response byte, minus what the page still waited after the click. The background times prefetches through
+  `webRequest`, holding them in memory only.
 - Settings, and the sites with prefetching off.
 
+**Clear** in the popup deletes every click record, your fine-tuned weights and the time saved, so the default weights run again.
+
 Traces are geometry only: cursor positions and target rectangles. They contain no URLs, page text or element contents.
+See [PRIVACY.md](PRIVACY.md).
 
 ## Development
 

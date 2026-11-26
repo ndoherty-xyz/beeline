@@ -41,7 +41,8 @@ Do not restate what the code says, and do not narrate a change. Git history cove
 ## Scope
 
 - The overlay can switch between the model and Foresight, to compare how they feel in use. Numbers come only
-  from offline comparisons over recorded traces, never from the extension.
+  from offline comparisons over recorded traces, never from the extension. The popup's time-saved counter is the one
+  exception: it measures what prefetching saved, and doesn't compare predictors.
 - Keep `packages/extension/src/baselines.ts` and `packages/beeline/src/model.ts` pure (no DOM, no `chrome.*`) so traces can be replayed through them in Node.
 - Prefetch only, never prerender, and same-origin only. Keep the skip rules in `prefetch.ts` (action-like URLs,
   downloads, the current page, pages with their own speculation rules) and the per-site off switch.

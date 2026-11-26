@@ -1,8 +1,8 @@
 // Content script: prefetches the link you're heading for, draws the overlay from the beeline core (or Foresight), and
-// records traces.
+// records traces and how long each page waited for its server.
 
 import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame, type ModelWeights } from "beeline";
-import type { PersonalModel } from "./background.ts";
+import type { PersonalModel, PrefetchedPageWait } from "./background.ts";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
 // Replaced whenever the background fine-tunes personal weights.
@@ -49,6 +49,14 @@ function setPrefetchEnabled(enabled: boolean): void {
     stopPrefetching();
     stopPrefetching = undefined;
   }
+}
+
+// A prefetched page waits only for what was left of its prefetch; the background takes that from the prefetch's time.
+const navigationTiming = performance.getEntriesByType("navigation")[0] as
+  | (PerformanceNavigationTiming & { deliveryType: string })
+  | undefined;
+if (navigationTiming?.type === "navigate" && navigationTiming.deliveryType === "navigational-prefetch") {
+  chrome.runtime.sendMessage({ waitMs: navigationTiming.responseStart } satisfies PrefetchedPageWait);
 }
 
 // Overlay ----------
@@ -285,9 +293,6 @@ addEventListener("resize", () => {
 
 // Recording ----------
 
-let recordingEnabled = true;
-let device = "mouse";
-
 // Random per page load, so a miss and its retry can be paired without storing the URL.
 const pageId = Math.random().toString(36).slice(2, 10);
 let clickSeq = 0;
@@ -427,7 +432,6 @@ addEventListener(
     const id = `${pageId}-${seq}`;
     const trace: Record<string, unknown> = {
       time,
-      device,
       viewport: [innerWidth, innerHeight],
       samples: pointerSamples.map((sample) =>
         [sample.t - event.timeStamp, sample.x, sample.y, sample.predictedX, sample.predictedY]
@@ -487,9 +491,7 @@ addEventListener(
         };
       }
     }
-    // Kept for fine-tuning either way; only recorded clicks are exported, and get an outcome.
-    chrome.storage.local.set({ [`${recordingEnabled ? "trace" : "training"}:${time}:${id}`]: trace });
-    if (!recordingEnabled) return;
+    chrome.storage.local.set({ [`trace:${time}:${id}`]: trace });
 
     pendingOutcome = {
       id,
@@ -552,10 +554,10 @@ const isPrefetchOffHere = (prefetchOffSites: unknown) => ((prefetchOffSites as s
 
 /**
  * Function to run new weights on this page, restarting the overlay and prefetching on them if they're on.
- * @param weights The personal weights from the background.
+ * @param weights The personal weights from the background, or undefined for the default after Clear.
  * @returns Nothing.
  */
-function runPersonalWeights(weights: ModelWeights): void {
+function runPersonalWeights(weights: ModelWeights | undefined): void {
   personalWeights = weights;
   beeline.destroy();
   beeline = createBeeline({ weights });
@@ -566,24 +568,20 @@ function runPersonalWeights(weights: ModelWeights): void {
   }
 }
 
-chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold", "recording", "device"]).then((settings) => {
+chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold"]).then((settings) => {
   if (settings.personalModel) runPersonalWeights((settings.personalModel as PersonalModel).weights);
   setPrefetchEnabled(!isPrefetchOffHere(settings.prefetchOffSites));
   setOverlayEnabled(settings.overlay === true);
   overlaySettings.predictor = (settings.overlayPredictor as string | undefined) ?? "model";
   overlaySettings.showAllTargets = settings.overlayTargets === "all";
   overlaySettings.thresholdPercent = (settings.overlayThreshold as number | undefined) ?? 80;
-  recordingEnabled = settings.recording !== false;
-  device = (settings.device as string | undefined) ?? "mouse";
 });
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
-  if (changes.personalModel) runPersonalWeights((changes.personalModel.newValue as PersonalModel).weights);
+  if (changes.personalModel) runPersonalWeights((changes.personalModel.newValue as PersonalModel | undefined)?.weights);
   if (changes.prefetchOffSites) setPrefetchEnabled(!isPrefetchOffHere(changes.prefetchOffSites.newValue));
   if (changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
   if (changes.overlayPredictor) overlaySettings.predictor = changes.overlayPredictor.newValue as string;
   if (changes.overlayTargets) overlaySettings.showAllTargets = changes.overlayTargets.newValue === "all";
   if (changes.overlayThreshold) overlaySettings.thresholdPercent = changes.overlayThreshold.newValue as number;
-  if (changes.recording) recordingEnabled = changes.recording.newValue !== false;
-  if (changes.device) device = changes.device.newValue as string;
 });

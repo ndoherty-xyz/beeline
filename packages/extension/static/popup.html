@@ -1,49 +1,142 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <title>beeline</title>
     <style>
-      body { font: 13px system-ui, sans-serif; width: 220px; margin: 12px; }
-      label { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-      #trace-count, #model-status { color: #666; margin: 12px 0 8px; }
-      fieldset { border: none; margin: 0 0 8px; padding: 0 0 0 22px; }
-      fieldset:disabled { opacity: 0.5; }
-      #overlay-threshold { width: 4em; }
+      :root {
+        color-scheme: light dark;
+        --background: #fff;
+        --foreground: #000;
+        --muted: #666;
+        --line: #e5e5e5;
+        --track: #949494;
+        --accent: #ffc900;
+        --danger: #d92d20;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #000;
+          --foreground: #fff;
+          --muted: #a3a3a3;
+          --line: #2e2e2e;
+          --track: #6b6b6b;
+          --danger: #ff6b5b;
+        }
+      }
+      * { box-sizing: border-box; }
+      body { width: 280px; margin: 0; padding: 14px 12px 12px; background: var(--background); color: var(--foreground); font: 13px/1.35 system-ui, sans-serif; }
+      header { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; font-size: 15px; font-weight: 600; }
+      header img { width: 24px; height: 24px; }
+      .time-saved { padding: 6px 12px 18px; text-align: center; }
+      .time-saved > span { display: block; }
+      .time-saved .label { color: var(--muted); font-size: 12px; }
+      #time-saved { font-size: 36px; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+      #pages-saved { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .card { border: 1px solid var(--line); border-radius: 10px; }
+      .row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+      .row + .row { border-top: 1px solid var(--line); }
+      .row > span { flex: 1; min-width: 0; }
+      .title, .site { display: block; }
+      .site { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; text-wrap: pretty; }
+      :focus-visible { outline: 2px solid var(--foreground); outline-offset: 2px; }
+
+      /* Switches */
+      input[type="checkbox"] {
+        appearance: none; flex: none; position: relative; width: 32px; height: 18px; margin: 0;
+        border-radius: 9px; background: var(--track); cursor: pointer; transition: background-color 160ms ease;
+      }
+      input[type="checkbox"]::after {
+        content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+        background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.3); transition: transform 160ms var(--ease-out);
+      }
+      input[type="checkbox"]:checked { background: var(--accent); }
+      input[type="checkbox"]:checked::after { background: #000; transform: translateX(14px); }
+      input[type="checkbox"]:disabled { opacity: 0.4; cursor: default; }
+
+      /* Advanced */
+      details { margin-top: 12px; padding: 0 12px; color: var(--muted); font-size: 12px; }
+      summary { cursor: pointer; padding: 8px 0; }
+      #click-counts { margin: 4px 0 8px; white-space: pre-line; font-variant-numeric: tabular-nums; }
+      .setting { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; color: var(--foreground); }
+      .setting > select, .control { width: 11.5em; }
+      .control { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+      fieldset { border: none; margin: 0; padding: 0 0 0 12px; border-left: 1px solid var(--line); }
+      fieldset:disabled { opacity: 0.4; pointer-events: none; }
+      select, input[type="number"], button {
+        font: inherit; color: var(--foreground); background: var(--background);
+        border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px;
+      }
+      #overlay-threshold { width: 4.5em; text-align: right; }
+      #overlay-threshold:disabled { opacity: 0.4; }
+      button { cursor: pointer; padding: 4px 10px; transition: transform 160ms var(--ease-out), background-color 150ms ease; }
+      button:disabled { opacity: 0.4; cursor: default; }
+      button:not(:disabled):active { transform: scale(0.97); }
+      @media (hover: hover) {
+        button:not(:disabled):hover, select:hover { background: color-mix(in srgb, var(--foreground) 5%, var(--background)); }
+      }
+      #export { margin-top: 4px; }
+
+      footer { display: flex; justify-content: flex-end; margin-top: 12px; padding: 0 12px; }
+      #clear { border: none; padding: 4px 0; background: none; color: var(--muted); text-align: right; }
+      #clear.confirming { color: var(--danger); font-weight: 500; }
+      @media (hover: hover) {
+        #clear:hover { background: none; color: var(--danger); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * { transition-duration: 0.01ms !important; }
+      }
     </style>
   </head>
   <body>
-    <label><input type="checkbox" id="prefetch" /> Prefetch on <span id="prefetch-site"></span></label>
-    <label><input type="checkbox" id="overlay" /> Show predictions</label>
-    <fieldset id="overlay-options">
-      <label>
-        Predictor
-        <select id="overlay-predictor">
-          <option value="model">Model</option>
-          <option value="foresight">Foresight</option>
-        </select>
+    <header><img src="icons/icon-48.png" alt="" /> beeline</header>
+    <section class="time-saved">
+      <span class="label">Time saved</span>
+      <span id="time-saved">0.0 s</span>
+      <span id="pages-saved">0 pages</span>
+    </section>
+    <section class="card">
+      <label class="row">
+        <span>
+          <span class="title" id="prefetch-title">Prefetch on</span>
+          <span class="site" id="prefetch-site"></span>
+          <span class="sub" id="prefetch-detail">Loads links as your cursor heads for them</span>
+        </span>
+        <input type="checkbox" role="switch" id="prefetch" disabled aria-labelledby="prefetch-title prefetch-site" aria-describedby="prefetch-detail" />
       </label>
-      <label>
-        Show
-        <select id="overlay-targets">
-          <option value="firing">Firing targets only</option>
-          <option value="all">All targets</option>
-        </select>
-      </label>
-      <label>Fire at <input type="number" id="overlay-threshold" min="1" max="99" step="1" /> %</label>
-    </fieldset>
-    <label><input type="checkbox" id="recording" /> Record clicks</label>
-    <label>
-      Device
-      <select id="device">
-        <option value="mouse">Mouse</option>
-        <option value="trackpad">Trackpad</option>
-      </select>
-    </label>
-    <p id="model-status"></p>
-    <p id="trace-count"></p>
-    <button id="export">Export</button>
-    <button id="clear">Clear</button>
+      <div class="row">
+        <span>
+          <span class="title" id="model-name">Running default weights</span>
+          <span class="sub" id="model-detail">Starts learning how you move after 100 clicks</span>
+        </span>
+      </div>
+    </section>
+    <details>
+      <summary>Advanced</summary>
+      <p id="click-counts">Loading…</p>
+      <label class="setting">Show predictions <input type="checkbox" role="switch" id="overlay" /></label>
+      <fieldset id="overlay-options" disabled>
+        <label class="setting">
+          Predictor
+          <select id="overlay-predictor">
+            <option value="model">Model</option>
+            <option value="foresight">Foresight</option>
+          </select>
+        </label>
+        <label class="setting">
+          Show
+          <select id="overlay-targets">
+            <option value="firing">Firing targets only</option>
+            <option value="all">All targets</option>
+          </select>
+        </label>
+        <label class="setting">Fire at <span class="control"><input type="number" id="overlay-threshold" min="1" max="99" step="1" /> %</span></label>
+      </fieldset>
+      <button id="export" disabled>Export traces</button>
+    </details>
+    <footer><button id="clear">Clear data</button></footer>
     <script src="popup.js"></script>
   </body>
 </html>

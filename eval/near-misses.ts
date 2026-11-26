@@ -50,7 +50,7 @@ console.log("A near miss is a proxy label: an empty-space click followed within 
 
 console.log("| device | near misses | distance px, median (p90) | above | below | side only | caught by 4 / 8 / 12 px slop |");
 console.log("|---|---|---|---|---|---|---|");
-for (const device of ["mouse", "trackpad"]) {
+for (const device of ["mouse", "trackpad", undefined]) {
   const deviceMisses = nearMisses.filter(({ miss }) => miss.device === device);
   if (deviceMisses.length === 0) continue;
   const distances = deviceMisses.map(({ distance }) => distance);
@@ -58,7 +58,7 @@ for (const device of ["mouse", "trackpad"]) {
   const above = deviceMisses.filter(({ dy }) => dy < 0).length;
   const below = deviceMisses.filter(({ dy }) => dy > 0).length;
   const sideOnly = deviceMisses.filter(({ dx, dy }) => dx !== 0 && dy === 0).length;
-  console.log(`| ${device} | ${deviceMisses.length} | ${formatMedianAndP90(distances)} | ${above} | ${below} | ${sideOnly} | ${caught} |`);
+  console.log(`| ${device ?? "not recorded"} | ${deviceMisses.length} | ${formatMedianAndP90(distances)} | ${above} | ${below} | ${sideOnly} | ${caught} |`);
 }
 
 console.log("\nWhat followed each click (share of clicks with a complete outcome):\n");
@@ -79,9 +79,9 @@ for (const [name, group] of [
 console.log("\nCursor movement during the press, pointerdown to pointerup, px median (p90):\n");
 console.log("| device | near misses | clicks on a target |");
 console.log("|---|---|---|");
-for (const device of ["mouse", "trackpad"]) {
+for (const device of ["mouse", "trackpad", undefined]) {
   const missMovement = nearMisses.filter(({ miss }) => miss.device === device).flatMap(({ miss }) => measurePressMovement(miss) ?? []);
   const targetMovement = targetClicks.filter((trace) => trace.device === device).flatMap((trace) => measurePressMovement(trace) ?? []);
   if (missMovement.length + targetMovement.length === 0) continue;
-  console.log(`| ${device} | ${formatMedianAndP90(missMovement)} | ${formatMedianAndP90(targetMovement)} |`);
+  console.log(`| ${device ?? "not recorded"} | ${formatMedianAndP90(missMovement)} | ${formatMedianAndP90(targetMovement)} |`);
 }

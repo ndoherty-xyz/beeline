@@ -1,159 +1,247 @@
-// Fine-tunes the output layer (the output weights and the none option) on the user's own clicks, keeping the hidden
-// layer and the input standardisation fixed. Mirrors train/train.py's train(start=..., trainable=["output_weights",
-// "none_weights", "none_bias"]): the same snapshots, loss, Adam and weight decay. Pure, so it runs in Node.
+// Fine-tunes every weight of the model on the user's clicks, keeping the input standardisation fixed. Mirrors
+// train/train.py's train(start=..., steps=...): the same snapshots, loss, Adam and weight decay. Pure, so it runs in
+// Node.
 
 import { computeMotionFeatures, computeTargetFeatures, type ModelWeights } from "./model.ts";
 import { targetToRect, type Trace } from "./traces.ts";
 
 const SNAPSHOT_WINDOW_MS = 1000;
 const SNAPSHOT_STRIDE = 2;
+const TARGET_FEATURE_COUNT = 9;
 const TRACES_PER_BATCH = 32;
 const WEIGHT_DECAY = 1e-4;
+// Standardised features kept between batches, about 45 KB per click; clicks past it are re-measured each time they're
+// drawn.
+const FEATURE_CACHE_BYTES = 64 * 2 ** 20;
 
 export type FineTuneOptions = {
   /** Adam steps, one batch of clicks each. */
   steps?: number;
   learningRate?: number;
-  /** Returns a random order of the click indexes, drawn once per pass over the clicks. */
+  /** Returns an order of the click indexes, drawn once per pass over the clicks. By default a fixed-seed shuffle, so the
+   * same clicks always give the same weights. */
   shuffleIndices?: (count: number) => number[];
 };
 
-// Gradient ----------
+// Snapshots ----------
 
-/** Parameters in one array: the output weights, then the none weights (on standardised motion), then the none bias. */
-type OutputLayer = { params: Float64Array; hiddenUnits: number; motionCount: number };
+/** One snapshot of a click, standardised and rounded to float32 as train.py's inputs are. */
+type Snapshot = { motionFeatures: Float32Array; targetFeatures: Float32Array; label: number };
 
 /**
- * Function to add one click's cross-entropy gradient to `gradient`, summed over its snapshots as train.py's
- * build_snapshots and label_snapshots make them: every other sample of the last second, counting back from the last.
- * @param weights The weights whose hidden layer stays fixed.
- * @param targetWeights The hidden layer's target-feature weights, flat: [unit * target features + feature].
- * @param layer The output layer being trained.
+ * Function to measure every snapshot of one click (train.py's build_snapshots), standardised.
+ * @param weights The weights, for their standardisation and `withinMs`.
  * @param trace The click, with its samples since the last scroll, oldest first.
- * @param gradient Where the gradient is summed.
- * @returns The number of snapshots added.
+ * @returns Its snapshots, newest first; a label of the target count means the none option.
  */
-function addClickGradient(weights: ModelWeights, targetWeights: Float64Array, layer: OutputLayer, trace: Trace, gradient: Float64Array): number {
-  const { params, hiddenUnits, motionCount } = layer;
+function measureSnapshots(weights: ModelWeights, trace: Trace): Snapshot[] {
+  const motionCount = weights.noneWeights.length;
+  const standardise = (feature: number, index: number) => (Math.fround(feature) - weights.inputMean[index]) / weights.inputStd[index];
   const history = trace.samples.map(([t, x, y]) => ({ t, x, y }));
   const targetRects = trace.targets.map(targetToRect);
-  const hidden = new Float64Array(targetRects.length * hiddenUnits);
-  const scores = new Float64Array(targetRects.length + 1);
   const firstTime = Math.min(-SNAPSHOT_WINDOW_MS, history.at(-1)!.t);
-  let snapshotCount = 0;
+  const snapshots: Snapshot[] = [];
   for (let index = history.length - 1; index >= 0 && history[index].t >= firstTime; index -= SNAPSHOT_STRIDE) {
-    snapshotCount++;
     const { motionFeatures, heading } = computeMotionFeatures(history.slice(0, index + 1));
-    // The motion part of each unit's activation is the same for every target.
-    const motionActivations = Float64Array.from(weights.hiddenWeights.map((unitWeights, unit) =>
-      motionFeatures.reduce((sum, feature, featureIndex) => sum + unitWeights[featureIndex] * feature, weights.hiddenBiases[unit]),
-    ));
-    for (let target = 0; target < targetRects.length; target++) {
-      const targetFeatures = computeTargetFeatures(history[index], heading, targetRects[target]);
-      const row = target * hiddenUnits;
-      const [f0, f1, f2, f3, f4, f5, f6, f7, f8] = targetFeatures;
-      let score = 0;
-      for (let unit = 0; unit < hiddenUnits; unit++) {
-        const w = unit * 9;
-        const activation = motionActivations[unit] + targetWeights[w] * f0 + targetWeights[w + 1] * f1 + targetWeights[w + 2] * f2 + targetWeights[w + 3] * f3 + targetWeights[w + 4] * f4 + targetWeights[w + 5] * f5 + targetWeights[w + 6] * f6 + targetWeights[w + 7] * f7 + targetWeights[w + 8] * f8;
-        hidden[row + unit] = activation > 0 ? activation : 0;
-        score += hidden[row + unit] * params[unit];
-      }
-      scores[target] = score;
-    }
-    const standardisedMotion = motionFeatures.map((feature, featureIndex) => (feature - weights.inputMean[featureIndex]) / weights.inputStd[featureIndex]);
-    scores[targetRects.length] = standardisedMotion.reduce((sum, feature, featureIndex) => sum + params[hiddenUnits + featureIndex] * feature, params[hiddenUnits + motionCount]);
-
-    // Softmax over the targets and the none option; the gradient of each score is its probability minus the label.
-    const label = history[index].t >= -weights.withinMs && trace.clicked !== -1 ? trace.clicked : targetRects.length;
-    const maxScore = Math.max(...scores);
-    const exponentials = scores.map((score) => Math.exp(score - maxScore));
-    const total = exponentials.reduce((sum, value) => sum + value, 0);
-    targetRects.forEach((_, target) => {
-      const scoreGradient = exponentials[target] / total - (target === label ? 1 : 0);
-      const row = target * hiddenUnits;
-      for (let unit = 0; unit < hiddenUnits; unit++) gradient[unit] += scoreGradient * hidden[row + unit];
+    const targetFeatures = new Float32Array(targetRects.length * TARGET_FEATURE_COUNT);
+    targetRects.forEach((rect, target) => {
+      computeTargetFeatures(history[index], heading, rect).forEach((feature, featureIndex) => {
+        targetFeatures[target * TARGET_FEATURE_COUNT + featureIndex] = standardise(feature, motionCount + featureIndex);
+      });
     });
-    const noneGradient = exponentials[targetRects.length] / total - (label === targetRects.length ? 1 : 0);
-    standardisedMotion.forEach((feature, featureIndex) => (gradient[hiddenUnits + featureIndex] += noneGradient * feature));
-    gradient[hiddenUnits + motionCount] += noneGradient;
+    const label = history[index].t >= -weights.withinMs && trace.clicked !== -1 ? trace.clicked : targetRects.length;
+    snapshots.push({ motionFeatures: Float32Array.from(motionFeatures, standardise), targetFeatures, label });
   }
-  return snapshotCount;
+  return snapshots;
+}
+
+/**
+ * Function to make a shuffle with a fixed seed (mulberry32), so a retried update gives the same weights.
+ * @returns A function that returns the indexes 0 to count - 1 in a pseudo-random order, a new one each call.
+ */
+function createSeededShuffle(): (count: number) => number[] {
+  let state = 0;
+  return (count) => {
+    const indexes = Array.from({ length: count }, (_, index) => index);
+    for (let index = count - 1; index > 0; index--) {
+      state = (state + 0x6d2b79f5) | 0;
+      let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+      const other = Math.floor((((mixed ^ (mixed >>> 14)) >>> 0) / 2 ** 32) * (index + 1));
+      [indexes[index], indexes[other]] = [indexes[other], indexes[index]];
+    }
+    return indexes;
+  };
 }
 
 // Training ----------
 
+/** Where each group of standardised parameters starts in one array: each unit's input weights, then the hidden biases,
+ * the output weights, the none weights and the none bias. */
+type ParamLayout = {
+  hiddenUnits: number;
+  motionCount: number;
+  featureCount: number;
+  biasStart: number;
+  outputStart: number;
+  noneStart: number;
+  noneBiasIndex: number;
+};
+
 /**
- * Function to shuffle the indexes 0 to count - 1 with Math.random.
- * @param count How many indexes.
- * @returns them in a random order.
+ * Function to add one snapshot's cross-entropy gradient to `gradient`.
+ * @param params The standardised parameters, laid out as `ParamLayout` says.
+ * @param layout Where each group of parameters starts.
+ * @param snapshot The snapshot.
+ * @param gradient Where the gradient is summed.
+ * @returns Nothing.
  */
-function shuffleIndicesRandomly(count: number): number[] {
-  const indexes = Array.from({ length: count }, (_, index) => index);
-  for (let index = count - 1; index > 0; index--) {
-    const other = Math.floor(Math.random() * (index + 1));
-    [indexes[index], indexes[other]] = [indexes[other], indexes[index]];
+function addSnapshotGradient(params: Float64Array, layout: ParamLayout, snapshot: Snapshot, gradient: Float64Array): void {
+  const { hiddenUnits, motionCount, featureCount, biasStart, outputStart, noneStart, noneBiasIndex } = layout;
+  const { motionFeatures, targetFeatures, label } = snapshot;
+  const motionActivations = new Float64Array(hiddenUnits);
+  const motionGradients = new Float64Array(hiddenUnits);
+  const targetCount = targetFeatures.length / TARGET_FEATURE_COUNT;
+  const activations = new Float64Array(targetCount * hiddenUnits);
+  const scores = new Float64Array(targetCount + 1);
+
+  // Forward: the motion part of each unit's activation is the same for every target.
+  for (let unit = 0; unit < hiddenUnits; unit++) {
+    let activation = params[biasStart + unit];
+    for (let feature = 0; feature < motionCount; feature++) activation += params[unit * featureCount + feature] * motionFeatures[feature];
+    motionActivations[unit] = activation;
   }
-  return indexes;
+  let noneScore = params[noneBiasIndex];
+  for (let feature = 0; feature < motionCount; feature++) noneScore += params[noneStart + feature] * motionFeatures[feature];
+  scores[targetCount] = noneScore;
+  let maxScore = noneScore;
+  for (let target = 0; target < targetCount; target++) {
+    let score = 0;
+    for (let unit = 0; unit < hiddenUnits; unit++) {
+      let activation = motionActivations[unit];
+      const weightStart = unit * featureCount + motionCount;
+      for (let feature = 0; feature < TARGET_FEATURE_COUNT; feature++) {
+        activation += params[weightStart + feature] * targetFeatures[target * TARGET_FEATURE_COUNT + feature];
+      }
+      activations[target * hiddenUnits + unit] = activation > 0 ? activation : 0;
+      score += activations[target * hiddenUnits + unit] * params[outputStart + unit];
+    }
+    scores[target] = score;
+    if (score > maxScore) maxScore = score;
+  }
+  let total = 0;
+  for (let index = 0; index <= targetCount; index++) total += scores[index] = Math.exp(scores[index] - maxScore);
+
+  // Backward: each score's gradient is its probability minus the label.
+  const noneGradient = scores[targetCount] / total - (label === targetCount ? 1 : 0);
+  gradient[noneBiasIndex] += noneGradient;
+  for (let feature = 0; feature < motionCount; feature++) gradient[noneStart + feature] += noneGradient * motionFeatures[feature];
+  for (let target = 0; target < targetCount; target++) {
+    const scoreGradient = scores[target] / total - (target === label ? 1 : 0);
+    for (let unit = 0; unit < hiddenUnits; unit++) {
+      const activation = activations[target * hiddenUnits + unit];
+      if (activation <= 0) continue;
+      gradient[outputStart + unit] += scoreGradient * activation;
+      const unitGradient = scoreGradient * params[outputStart + unit];
+      motionGradients[unit] += unitGradient;
+      const weightStart = unit * featureCount + motionCount;
+      for (let feature = 0; feature < TARGET_FEATURE_COUNT; feature++) {
+        gradient[weightStart + feature] += unitGradient * targetFeatures[target * TARGET_FEATURE_COUNT + feature];
+      }
+    }
+  }
+  for (let unit = 0; unit < hiddenUnits; unit++) {
+    gradient[biasStart + unit] += motionGradients[unit];
+    for (let feature = 0; feature < motionCount; feature++) gradient[unit * featureCount + feature] += motionGradients[unit] * motionFeatures[feature];
+  }
 }
 
 /**
- * Function to fine-tune the output layer on the user's clicks with Adam, from a fresh optimizer.
+ * Function to fine-tune every weight on the user's clicks with Adam, from a fresh optimizer, keeping the input
+ * standardisation the weights were trained with. Works for any number of hidden units.
  * @param weights The weights to start from.
  * @param traces The clicks to train on (see `selectTrainingClicks`).
  * @param options Steps, learning rate and shuffle.
- * @returns New weights with the output weights and none option updated.
+ * @returns New weights.
  */
-export function fineTuneOutputLayer(
-  weights: ModelWeights,
-  traces: Trace[],
-  { steps = 300, learningRate = 1e-3, shuffleIndices = shuffleIndicesRandomly }: FineTuneOptions = {},
-): ModelWeights {
+export function fineTune(weights: ModelWeights, traces: Trace[], options: FineTuneOptions = {}): ModelWeights {
+  if (!traces.length) return weights;
   const hiddenUnits = weights.hiddenBiases.length;
   const motionCount = weights.noneWeights.length;
-  const targetWeights = Float64Array.from(weights.hiddenWeights.flatMap((unitWeights) => unitWeights.slice(motionCount)));
-  // The none option trains on standardised motion, as in train.py, so unfold the standardisation from it.
-  const motionMean = weights.inputMean.slice(0, motionCount);
-  const motionStd = weights.inputStd.slice(0, motionCount);
-  const params = Float64Array.from([
-    ...weights.outputWeights,
-    ...weights.noneWeights.map((weight, index) => weight * motionStd[index]),
-    weights.noneBias + weights.noneWeights.reduce((sum, weight, index) => sum + weight * motionMean[index], 0),
-  ]);
-  const layer = { params, hiddenUnits, motionCount };
-  const firstMoment = new Float64Array(params.length);
-  const secondMoment = new Float64Array(params.length);
+  const featureCount = motionCount + TARGET_FEATURE_COUNT;
+  const { inputMean, inputStd } = weights;
 
-  const batchesPerEpoch = Math.ceil(traces.length / TRACES_PER_BATCH);
-  const epochs = Math.ceil(steps / batchesPerEpoch);
+  // Unfold the standardisation, as train.py trains on standardised inputs.
+  const biasStart = hiddenUnits * featureCount;
+  const outputStart = biasStart + hiddenUnits;
+  const noneStart = outputStart + hiddenUnits;
+  const noneBiasIndex = noneStart + motionCount;
+  const params = new Float64Array(noneBiasIndex + 1);
+  const layout = { hiddenUnits, motionCount, featureCount, biasStart, outputStart, noneStart, noneBiasIndex };
+  weights.hiddenWeights.forEach((unitWeights, unit) => {
+    params[biasStart + unit] = weights.hiddenBiases[unit];
+    unitWeights.forEach((weight, feature) => {
+      params[unit * featureCount + feature] = weight * inputStd[feature];
+      params[biasStart + unit] += weight * inputMean[feature];
+    });
+    params[outputStart + unit] = weights.outputWeights[unit];
+  });
+  params[noneBiasIndex] = weights.noneBias;
+  weights.noneWeights.forEach((weight, feature) => {
+    params[noneStart + feature] = weight * inputStd[feature];
+    params[noneBiasIndex] += weight * inputMean[feature];
+  });
+
+  // Snapshots of the first clicks drawn, up to the cache size; the rest are measured each time they're drawn.
+  const cachedSnapshots = new Map<number, Snapshot[]>();
+  let cachedBytes = 0;
+
+  // Adam on the mean gradient plus weight decay, as train.py's train(steps=...) does.
+  const { steps = 300, learningRate = 1e-3, shuffleIndices = createSeededShuffle() } = options;
+  const firstMoments = new Float64Array(params.length);
+  const secondMoments = new Float64Array(params.length);
+  const gradient = new Float64Array(params.length);
   let step = 0;
-  for (let epoch = 0; epoch < epochs; epoch++) {
+  while (step < steps) {
     const order = shuffleIndices(traces.length);
+    if (order.length !== traces.length) throw new Error("Expected one shuffle index per training click.");
     for (let batchStart = 0; batchStart < order.length && step < steps; batchStart += TRACES_PER_BATCH) {
-      // The mean gradient over every snapshot in the batch, plus weight decay, then one Adam step.
-      const gradient = new Float64Array(params.length);
+      gradient.fill(0);
       let snapshotCount = 0;
-      for (const index of order.slice(batchStart, batchStart + TRACES_PER_BATCH)) {
-        snapshotCount += addClickGradient(weights, targetWeights, layer, traces[index], gradient);
+      for (const clickIndex of order.slice(batchStart, batchStart + TRACES_PER_BATCH)) {
+        let snapshots = cachedSnapshots.get(clickIndex);
+        if (!snapshots) {
+          snapshots = measureSnapshots(weights, traces[clickIndex]);
+          const bytes = snapshots.reduce((sum, { targetFeatures }) => sum + 4 * (motionCount + targetFeatures.length), 0);
+          if (cachedBytes + bytes <= FEATURE_CACHE_BYTES) {
+            cachedSnapshots.set(clickIndex, snapshots);
+            cachedBytes += bytes;
+          }
+        }
+        for (const snapshot of snapshots) addSnapshotGradient(params, layout, snapshot, gradient);
+        snapshotCount += snapshots.length;
       }
       step++;
       for (let index = 0; index < params.length; index++) {
         const decayedGradient = gradient[index] / snapshotCount + WEIGHT_DECAY * params[index];
-        firstMoment[index] = 0.9 * firstMoment[index] + 0.1 * decayedGradient;
-        secondMoment[index] = 0.999 * secondMoment[index] + 0.001 * decayedGradient ** 2;
-        const correctedFirst = firstMoment[index] / (1 - 0.9 ** step);
-        const correctedSecond = secondMoment[index] / (1 - 0.999 ** step);
+        firstMoments[index] = 0.9 * firstMoments[index] + 0.1 * decayedGradient;
+        secondMoments[index] = 0.999 * secondMoments[index] + 0.001 * decayedGradient ** 2;
+        const correctedFirst = firstMoments[index] / (1 - 0.9 ** step);
+        const correctedSecond = secondMoments[index] / (1 - 0.999 ** step);
         params[index] -= (learningRate * correctedFirst) / (Math.sqrt(correctedSecond) + 1e-8);
       }
     }
   }
 
-  // Fold the standardisation back into the none option, as train.py's export_weights does.
-  const noneWeights = motionStd.map((std, index) => params[hiddenUnits + index] / std);
+  // Fold the standardisation back in, as train.py's export_weights does.
+  const hiddenWeights = weights.hiddenWeights.map((unitWeights, unit) => unitWeights.map((_, feature) => params[unit * featureCount + feature] / inputStd[feature]));
+  const noneWeights = weights.noneWeights.map((_, feature) => params[noneStart + feature] / inputStd[feature]);
   return {
     ...weights,
-    outputWeights: [...params.subarray(0, hiddenUnits)],
+    hiddenWeights,
+    hiddenBiases: hiddenWeights.map((unitWeights, unit) => unitWeights.reduce((bias, weight, feature) => bias - weight * inputMean[feature], params[biasStart + unit])),
+    outputWeights: [...params.subarray(outputStart, noneStart)],
     noneWeights,
-    noneBias: params[hiddenUnits + motionCount] - noneWeights.reduce((sum, weight, index) => sum + weight * motionMean[index], 0),
+    noneBias: noneWeights.reduce((bias, weight, feature) => bias - weight * inputMean[feature], params[noneBiasIndex]),
   };
 }

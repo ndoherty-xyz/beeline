@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { targetToRect, type Trace } from "../eval/replay.ts";
+import { targetToRect, type Trace } from "../packages/beeline/src/traces.ts";
 import { predictTargetProbabilities, scoreTargets, type ModelWeights } from "../packages/beeline/src/model.ts";
 
 // Written by train/train.py: random weights, synthetic clicks, and what the Python model gives for them.

@@ -5,8 +5,8 @@
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { chromium, type Page } from "playwright";
-import { TARGET_SELECTOR } from "../packages/beeline/src/targets.ts";
-import type { Trace } from "./replay.ts";
+import { TARGET_SELECTOR } from "../../packages/beeline/src/targets.ts";
+import type { Trace } from "../../packages/beeline/src/traces.ts";
 
 // The extension keeps about this much cursor history before a click.
 const HISTORY_MS = 1000;
@@ -39,8 +39,11 @@ for (const file of readdirSync(`${adserpDir}/mouse-movement-data`).filter((name)
   const lastScroll = rows.findLast(({ event, t }) => event === "scroll" && t <= down.t);
   const scrollY = lastScroll?.y ?? 0;
   const moves = rows.filter(({ event, t }) => event === "mousemove" && t > (lastScroll?.t ?? -Infinity) && t >= down.t - HISTORY_MS && t < down.t);
-  // At ~60 Hz every sample is about one animation frame.
-  const samples: Trace["samples"] = [...moves, down].map(({ t, x, y }) => [t - down.t, x, Math.round((y - scrollY) * 10) / 10, x, Math.round((y - scrollY) * 10) / 10, 1]);
+  // At ~60 Hz every movement sample is about one animation frame.
+  const samples: Trace["samples"] = moves.map(({ t, x, y }) => {
+    const viewportY = Math.round((y - scrollY) * 10) / 10;
+    return [t - down.t, x, viewportY, x, viewportY, 1];
+  });
 
   if (window[0] !== pageWindow) {
     await page?.context().close();

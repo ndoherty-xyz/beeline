@@ -2,7 +2,8 @@
 // records traces and how long each page waited for its server.
 
 import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame, type ModelWeights } from "beeline";
-import type { PersonalModel, PrefetchedPageWait } from "./background.ts";
+import type { PersonalModel } from "./personal-model.ts";
+import type { PrefetchedPageWait } from "./background.ts";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
 // Replaced whenever the background fine-tunes personal weights.

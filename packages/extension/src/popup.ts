@@ -1,7 +1,8 @@
 // Popup: the time prefetching saved, the prefetch switch for the current site and which weights are running; under
 // Advanced, the click counts, the overlay and export; and clear.
 
-import type { PersonalModel, TimeSaved } from "./background.ts";
+import { CLICKS_PER_UPDATE, type PersonalModel } from "./personal-model.ts";
+import type { TimeSaved } from "./background.ts";
 
 const timeSavedText = document.getElementById("time-saved")!;
 const pagesSavedText = document.getElementById("pages-saved")!;
@@ -157,7 +158,7 @@ async function showClickCounts(): Promise<void> {
     newUsableClickCount?: number;
   };
   if (run !== clickCountsRun) return;
-  const remainingClicks = Math.max(0, 100 - newUsableClickCount);
+  const remainingClicks = Math.max(0, CLICKS_PER_UPDATE - newUsableClickCount);
   clickCountsText.textContent = [
     `${formatCount(traceKeys.length, "trace", "traces")} recorded, ${numberFormat.format(joinedOutcomeCount)} with ${joinedOutcomeCount === 1 ? "an outcome" : "outcomes"}`,
     personalModel && `Last update learned from ${formatCount(personalModel.clickCount, "click", "clicks")}`,

@@ -3,14 +3,20 @@
 import { createBeeline } from "./index.ts";
 import type { ModelWeights } from "./model.ts";
 
+export const PREFETCH_THRESHOLD = 0.22;
+export const HOVER_MS = 100;
+
 export type PrefetchOptions = {
-  /** The probability of a click within the next moment that prefetches a link. */
+  /** The probability of a click within the next moment that prefetches a link (default 0.22). */
   prefetchAbove?: number;
   /** How long the cursor rests on a link before it's prefetched anyway, in ms. */
   hoverMs?: number;
   /** Weights to run instead of the bundled default, as in `createBeeline`. */
   weights?: ModelWeights;
 };
+
+// Links already prefetched on this page, kept across restarts with new weights.
+const prefetchedUrls = new Set<string>();
 
 // Words in a path or query that suggest opening the link does something, like signing out or emptying a cart.
 const ACTION_WORDS = /(?<![a-z])(log[-_]?out|sign[-_]?out|delete|remove|unsubscribe|cart|add|confirm|token)(?![a-z])/i;
@@ -64,8 +70,7 @@ function prefetchUrl(url: string): void {
  * @param options The threshold, the hover floor and the weights.
  * @returns A function that stops.
  */
-export function prefetchLinks({ prefetchAbove = 0.4, hoverMs = 100, weights }: PrefetchOptions = {}): () => void {
-  const prefetchedUrls = new Set<string>();
+export function prefetchLinks({ prefetchAbove = PREFETCH_THRESHOLD, hoverMs = HOVER_MS, weights }: PrefetchOptions = {}): () => void {
   const prefetchOnce = (link: HTMLAnchorElement) => {
     if (prefetchedUrls.has(link.href) || !isPrefetchable(link)) return;
     prefetchedUrls.add(link.href);

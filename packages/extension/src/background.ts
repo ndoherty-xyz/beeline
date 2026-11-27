@@ -1,12 +1,8 @@
-// Background service worker: fine-tunes the model's output layer on the user's own clicks, from 100 clicks on and again
-// every 100 new ones, and stores the result for the content script to run. One update takes about 30 s at 2,500 clicks.
-// Also adds up the time prefetching saved, timing each prefetch request.
+// Fine-tune personal weights and record the time saved by prefetching.
 
-import { fineTuneOutputLayer, selectTrainingClicks, type ModelWeights, type Trace } from "beeline";
-import defaultWeights from "beeline/default-weights.json";
-
-/** The personal weights, how many clicks they were last fine-tuned on, and the time of the newest of those clicks. */
-export type PersonalModel = { weights: ModelWeights; clickCount: number; learnedUntil: number };
+import { fineTune, selectTrainingClicks, type ModelWeights, type Trace } from "beeline";
+import defaultWeights from "beeline/default-weights.json" with { type: "json" };
+import { CLICKS_PER_UPDATE, type PersonalModel } from "./personal-model.ts";
 
 /** The time prefetching saved, and over how many pages. */
 export type TimeSaved = { savedMs: number; pageCount: number };
@@ -16,15 +12,13 @@ export type PrefetchedPageWait = { waitMs: number };
 
 // Fine-tuning ----------
 
-const CLICKS_PER_UPDATE = 100;
-
 /**
  * Function to add new clicks to the stored count of usable clicks the weights haven't learned from, and once it
  * reaches 100, fine-tune the personal weights (or the default, the first time) on every stored click.
  * @param newTraces The clicks just stored.
  * @returns Nothing.
  */
-async function countClicksAndFineTune(newTraces: Trace[]): Promise<void> {
+export async function countClicksAndFineTune(newTraces: Trace[]): Promise<void> {
   const { personalModel, newUsableClickCount } = (await chrome.storage.local.get(["personalModel", "newUsableClickCount"])) as {
     personalModel?: PersonalModel;
     newUsableClickCount?: number;
@@ -40,14 +34,18 @@ async function countClicksAndFineTune(newTraces: Trace[]): Promise<void> {
     }
   }
   const traceKeys = (await chrome.storage.local.getKeys()).filter((key) => /^(trace|training):/.test(key));
-  const trainingClicks = selectTrainingClicks(Object.values(await chrome.storage.local.get(traceKeys)) as Trace[]);
-  const newClickTimes = trainingClicks.map((trace) => trace.time).filter((time) => time > learnedUntil);
-  if (newClickTimes.length < CLICKS_PER_UPDATE) {
-    await chrome.storage.local.set({ newUsableClickCount: newClickTimes.length });
-    return;
-  }
-  const weights = fineTuneOutputLayer(personalModel?.weights ?? (defaultWeights as ModelWeights), trainingClicks);
-  const updatedModel: PersonalModel = { weights, clickCount: trainingClicks.length, learnedUntil: Math.max(...newClickTimes) };
+  const storedTraces = (await chrome.storage.local.get(traceKeys)) as Record<string, Trace>;
+  const trainingClicks = selectTrainingClicks(Object.values(storedTraces));
+  const newClickCount = trainingClicks.filter(trace => trace.time > learnedUntil).length;
+  // Stored before training, so a worker stopped mid-update retries it on start.
+  await chrome.storage.local.set({ newUsableClickCount: newClickCount });
+  if (newClickCount < CLICKS_PER_UPDATE) return;
+  const newestTime = trainingClicks[trainingClicks.length - 1].time;
+  const newestKey = traceKeys.find(key => storedTraces[key]?.time === newestTime)!;
+  const weights = fineTune(personalModel?.weights ?? (defaultWeights as ModelWeights), trainingClicks);
+  // Clear can remove the training data while the worker is computing.
+  if (!(newestKey in await chrome.storage.local.get(newestKey))) return;
+  const updatedModel: PersonalModel = { weights, clickCount: trainingClicks.length, learnedUntil: newestTime };
   await chrome.storage.local.set({ personalModel: updatedModel, newUsableClickCount: 0 });
 }
 

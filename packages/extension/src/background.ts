@@ -2,7 +2,7 @@
 
 import { fineTune, selectTrainingClicks, type ModelWeights, type Trace } from "beeline";
 import defaultWeights from "beeline/default-weights.json" with { type: "json" };
-import { CLICKS_PER_UPDATE, PERSONAL_MODEL_VERSION, currentPersonalModel, type PersonalModel } from "./personal-model.ts";
+import { CLICKS_PER_UPDATE, type PersonalModel } from "./personal-model.ts";
 
 /** The time prefetching saved, and over how many pages. */
 export type TimeSaved = { savedMs: number; pageCount: number };
@@ -19,19 +19,17 @@ export type PrefetchedPageWait = { waitMs: number };
  * @returns Nothing.
  */
 export async function countClicksAndFineTune(newTraces: Trace[]): Promise<void> {
-  const stored = (await chrome.storage.local.get(["personalModel", "newUsableClickCount"])) as {
+  const { personalModel, newUsableClickCount } = (await chrome.storage.local.get(["personalModel", "newUsableClickCount"])) as {
     personalModel?: PersonalModel;
     newUsableClickCount?: number;
   };
-  const personalModel = currentPersonalModel(stored.personalModel);
-  const isStale = stored.personalModel !== undefined && !personalModel;
   const learnedUntil = personalModel?.learnedUntil ?? -Infinity;
   // A click on nothing counts here before the next click shows whether it was retried, so the count can run a little
   // high; loading every click below sets it exactly.
-  if (!isStale && stored.newUsableClickCount !== undefined) {
-    const usableClickCount = stored.newUsableClickCount + selectTrainingClicks(newTraces.filter((trace) => trace.time > learnedUntil)).length;
+  if (newUsableClickCount !== undefined) {
+    const usableClickCount = newUsableClickCount + selectTrainingClicks(newTraces.filter((trace) => trace.time > learnedUntil)).length;
     if (usableClickCount < CLICKS_PER_UPDATE) {
-      if (usableClickCount !== stored.newUsableClickCount) await chrome.storage.local.set({ newUsableClickCount: usableClickCount });
+      if (usableClickCount !== newUsableClickCount) await chrome.storage.local.set({ newUsableClickCount: usableClickCount });
       return;
     }
   }
@@ -41,21 +39,13 @@ export async function countClicksAndFineTune(newTraces: Trace[]): Promise<void> 
   const newClickCount = trainingClicks.filter(trace => trace.time > learnedUntil).length;
   // Stored before training, so a worker stopped mid-update retries it on start.
   await chrome.storage.local.set({ newUsableClickCount: newClickCount });
-  if (newClickCount < CLICKS_PER_UPDATE) {
-    if (isStale) await chrome.storage.local.remove("personalModel");
-    return;
-  }
+  if (newClickCount < CLICKS_PER_UPDATE) return;
   const newestTime = trainingClicks[trainingClicks.length - 1].time;
   const newestKey = traceKeys.find(key => storedTraces[key]?.time === newestTime)!;
   const weights = fineTune(personalModel?.weights ?? (defaultWeights as ModelWeights), trainingClicks);
   // Clear can remove the training data while the worker is computing.
   if (!(newestKey in await chrome.storage.local.get(newestKey))) return;
-  const updatedModel: PersonalModel = {
-    weights,
-    clickCount: trainingClicks.length,
-    learnedUntil: newestTime,
-    version: PERSONAL_MODEL_VERSION,
-  };
+  const updatedModel: PersonalModel = { weights, clickCount: trainingClicks.length, learnedUntil: newestTime };
   await chrome.storage.local.set({ personalModel: updatedModel, newUsableClickCount: 0 });
 }
 

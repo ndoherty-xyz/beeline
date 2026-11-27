@@ -31,7 +31,8 @@ const straightTrace: Trace = {
   pointerCursor: false,
 };
 
-test("isAcquisition is false when the cursor starts on the clicked target", () => {
+test("an acquisition requires movement onto the clicked target", () => {
+  assert.equal(isAcquisition({ ...straightTrace, clicked: -1 }), false);
   assert.equal(isAcquisition(straightTrace), true);
   assert.equal(isAcquisition({ ...straightTrace, samples: straightTrace.samples.slice(-3) }), false);
   assert.equal(isAcquisition({ ...straightTrace, samples: [] }), false);
@@ -47,10 +48,6 @@ test("each baseline fires the clicked target at the expected time", () => {
 
 test("scorePredictor counts hits, every first fire, and lead times", () => {
   assert.deepEqual(scorePredictor([straightTrace], replayHover), { clicks: 1, hits: 1, fires: 2, leadTimesMs: [70] });
-});
-
-test("isAcquisition is false for a click that hit no target", () => {
-  assert.equal(isAcquisition({ ...straightTrace, clicked: -1 }), false);
 });
 
 test("samplesSinceLastScroll keeps v1 samples and drops v2 samples up to the last scroll", () => {

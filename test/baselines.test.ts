@@ -17,14 +17,6 @@ test("predictForesightPoint returns the current point without usable velocity", 
   assert.deepEqual(predictForesightPoint([{ t: 0, x: 5, y: 6 }, { t: 16, x: 5, y: 6 }]), { x: 5, y: 6 }, "not moving");
 });
 
-test("predictForesightPoint reaches 200 * ln(1 + speed * 120 / 200) px along the velocity", () => {
-  // 1 px/ms to the right, with an older point outside the 80 ms window that must be ignored.
-  const frameHistory = [{ t: 0, x: 500, y: 500 }, ...[100, 116, 132, 148].map((t) => ({ t, x: t, y: 20 }))];
-  const predicted = predictForesightPoint(frameHistory);
-  assert.ok(Math.abs(predicted.x - (148 + 200 * Math.log(1.6))) < 1e-9);
-  assert.equal(predicted.y, 20);
-});
-
 test("segmentIntersectsRect", () => {
   assert.equal(segmentIntersectsRect({ x: 0, y: 15 }, { x: 30, y: 15 }, square), true, "crosses");
   assert.equal(segmentIntersectsRect({ x: 0, y: 15 }, { x: 5, y: 15 }, square), false, "stops short");

@@ -27,9 +27,24 @@ keyboard focus, or when a touch starts on it. It only prefetches:
 It never prerenders. To turn prefetching off for a site, open the popup on that site and turn off **Prefetch on**.
 
 The popup also shows which weights are running. The extension runs the default weights until it has 100 of your
-clicks. Then it fine-tunes on your clicks every 100 clicks, in the background.
+usable clicks. Then it updates all 32 hidden units and the output layer in the background every 100 new usable clicks.
+The extension prefetches at a predicted click probability of 0.22.
 
 To compare the model with [Foresight](https://foresightjs.com), turn on **Show predictions** in the popup.
+
+## Results
+
+After the first 100 usable clicks, Beeline anticipated **94 of 117** same-origin navigations on 126 later pages from one trackpad user. It left **51%** as many prefetches unused as Foresight.
+
+| Policy | Estimated waiting saved per navigation | Unused prefetches |
+|---|---:|---:|
+| 100 ms hover alone | 176 ms | 123 |
+| Beeline + hover | 276 ms | 357 |
+| Foresight + hover | 290 ms | 701 |
+
+The replay uses recorded click windows, assumes a 400 ms fetch, and counts one prefetch per destination per page. Run `node eval/policy.ts data/traces-2026-11-24.jsonl` with the original local export to reproduce it.
+
+On the test MacBook, scoring 200 targets took about **0.14 ms per frame** in Node. The first whole-model update took **7.1–7.2 seconds** in a Chromium worker.
 
 ## What it stores
 

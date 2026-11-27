@@ -2,7 +2,8 @@
 // records traces and how long each page waited for its server.
 
 import { createBeeline, prefetchLinks, TARGET_SELECTOR, type BeelineFrame, type ModelWeights } from "beeline";
-import type { PersonalModel, PrefetchedPageWait } from "./background.ts";
+import { currentPersonalModel, type PersonalModel } from "./personal-model.ts";
+import type { PrefetchedPageWait } from "./background.ts";
 import { FORESIGHT_VELOCITY_WINDOW_MS, predictForesightPoint, segmentIntersectsRect, type TimedPoint } from "./baselines.ts";
 
 // Replaced whenever the background fine-tunes personal weights.
@@ -569,7 +570,8 @@ function runPersonalWeights(weights: ModelWeights | undefined): void {
 }
 
 chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overlayPredictor", "overlayTargets", "overlayThreshold"]).then((settings) => {
-  if (settings.personalModel) runPersonalWeights((settings.personalModel as PersonalModel).weights);
+  const model = currentPersonalModel(settings.personalModel as PersonalModel | undefined);
+  if (model) runPersonalWeights(model.weights);
   setPrefetchEnabled(!isPrefetchOffHere(settings.prefetchOffSites));
   setOverlayEnabled(settings.overlay === true);
   overlaySettings.predictor = (settings.overlayPredictor as string | undefined) ?? "model";
@@ -578,7 +580,7 @@ chrome.storage.local.get(["personalModel", "prefetchOffSites", "overlay", "overl
 });
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
-  if (changes.personalModel) runPersonalWeights((changes.personalModel.newValue as PersonalModel | undefined)?.weights);
+  if (changes.personalModel) runPersonalWeights(currentPersonalModel(changes.personalModel.newValue as PersonalModel | undefined)?.weights);
   if (changes.prefetchOffSites) setPrefetchEnabled(!isPrefetchOffHere(changes.prefetchOffSites.newValue));
   if (changes.overlay) setOverlayEnabled(changes.overlay.newValue === true);
   if (changes.overlayPredictor) overlaySettings.predictor = changes.overlayPredictor.newValue as string;

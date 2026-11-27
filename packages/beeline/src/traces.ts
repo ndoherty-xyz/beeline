@@ -110,12 +110,11 @@ export function findEmptyClicksWithoutRetry(traces: Trace[]): Trace[] {
 }
 
 /**
- * Function to pick the clicks the model trains on, as train/train.py does: clicks where the cursor moved onto the
- * target, oldest first, then clicks on nothing without a retry. Each keeps only its samples since the last scroll.
+ * Function to select clicks where the cursor moved onto the target or clicked nothing without a retry.
  * @param traces The recorded clicks.
- * @returns Those clicks, as copies with their samples cut.
+ * @returns Clicks in time order, with samples since the last scroll.
  */
 export function selectTrainingClicks(traces: Trace[]): Trace[] {
   const cutTraces = traces.map((trace) => ({ ...trace, samples: samplesSinceLastScroll(trace).sort((a, b) => a[0] - b[0]) }));
-  return [...cutTraces.filter(isAcquisition).sort((a, b) => a.time - b.time), ...findEmptyClicksWithoutRetry(cutTraces)];
+  return [...cutTraces.filter(isAcquisition), ...findEmptyClicksWithoutRetry(cutTraces)].sort((a, b) => a.time - b.time);
 }

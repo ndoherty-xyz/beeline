@@ -8,7 +8,7 @@ eval/convert-adserp.ts, holding out whole people. --default trains on AdSERP's p
 sets the held-out split) and writes packages/beeline/src/default-weights.json, the committed out-of-box model.
 
 Writes packages/beeline/src/model-weights.json (or --out) (gitignored: trained on personal movement), test/finetune-fixture.json
-(an output-layer fine-tune of random weights on synthetic clicks), and test/model-fixture.json: synthetic
+(a whole-model fine-tune of random weights on synthetic clicks), and test/model-fixture.json: synthetic
 traces and random weights with the scores Python gives them, which test/model.test.ts checks the TS model
 reproduces.
 """
@@ -26,7 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 HELD_OUT_SHARE = 0.2
 SNAPSHOT_WINDOW_MS = 1000
 SNAPSHOT_STRIDE = 2  # every other sample: ~16 ms at 120 Hz
-HIDDEN_UNITS = 128
+HIDDEN_UNITS = 32
 EPOCHS = 30
 TRACES_PER_BATCH = 32
 LEARNING_RATE = 3e-3
@@ -35,8 +35,6 @@ RETRY_GAP_MS = 1000
 ADSERP_HELD_OUT_PEOPLE = 10
 # AdSERP is one layout (search results on one screen size), so it gets only twice the weight of its click count.
 ADSERP_REPEATS = 2
-# The on-device update: the output layer and none option only, from the current weights (packages/beeline/src/finetune.ts).
-OUTPUT_LAYER = ["output_weights", "none_weights", "none_bias"]
 FINE_TUNE_LEARNING_RATE = 1e-3
 # Two batches per pass, so the fixture covers a partial batch and stopping mid-pass.
 FINE_TUNE_FIXTURE_CLICKS = 34
@@ -89,21 +87,16 @@ def to_rects(targets):
     return np.hstack([targets[:, :2], targets[:, :2] + targets[:, 2:]])
 
 
-def build_snapshots(trace):
-    """Return model inputs for every snapshot of one click, as an (S, N, features) float32 array, and their times."""
+def build_snapshots(trace, within_ms):
+    """Return model inputs for every snapshot of one click, as an (S, N, features) float32 array, and their click labels."""
     samples = np.asarray(trace["samples"], dtype=np.float64)
     times, xs, ys = samples[:, 0], samples[:, 1], samples[:, 2]
     rects = to_rects(trace["targets"])
     # Counting back from the last sample, which is where the cursor rested at the click even if that was earlier.
     snapshot_indices = np.flatnonzero(times >= min(-SNAPSHOT_WINDOW_MS, times[-1]))[::-1][::SNAPSHOT_STRIDE][::-1]
     features = np.stack([compute_features(times, xs, ys, index, rects) for index in snapshot_indices]).astype(np.float32)
-    return features, times[snapshot_indices]
-
-
-def label_snapshots(trace, snapshot_times, within_ms):
-    """Return the label per snapshot: the clicked target's index, or -1 (none) where the click is further off than
-    within_ms."""
-    return np.where(snapshot_times >= -within_ms, trace["clicked"], -1)
+    labels = np.where(times[snapshot_indices] >= -within_ms, trace["clicked"], -1)
+    return features, labels
 
 
 # Training ----------
@@ -159,12 +152,11 @@ def stack_batch(snapshots, labels):
     return inputs, group_sizes, np.concatenate(labels)
 
 
-def train(train_snapshots, train_labels, held_out_snapshots=None, held_out_labels=None, start=None, trainable=None, steps=None, learning_rate=LEARNING_RATE):
+def train(train_snapshots, train_labels, held_out_snapshots=None, held_out_labels=None, start=None, steps=None, learning_rate=LEARNING_RATE):
     """Fit the scorer with Adam on standardised inputs; returns params and the standardisation.
 
-    start is (params, mean, std) from an earlier fit to continue from, keeping its standardisation; trainable names the
-    params to update (default all); steps replaces the EPOCHS passes with a fixed number of batches. Held-out loss is
-    printed each epoch when held-out data is given.
+    start supplies parameters and input scaling from an earlier fit. steps sets a fixed batch count.
+    With held-out data, print the loss each epoch.
     """
     rng = np.random.default_rng(0)
     if start:
@@ -186,10 +178,9 @@ def train(train_snapshots, train_labels, held_out_snapshots=None, held_out_label
     standardise = lambda block: ((block - mean) / std).astype(np.float32)
     train_snapshots = [standardise(block) for block in train_snapshots]
     held_out = held_out_snapshots and stack_batch([standardise(block) for block in held_out_snapshots], held_out_labels)
-    trainable = trainable or list(params)
 
-    first_moment = {name: np.zeros_like(params[name]) for name in trainable}
-    second_moment = {name: np.zeros_like(params[name]) for name in trainable}
+    first_moment = {name: np.zeros_like(value) for name, value in params.items()}
+    second_moment = {name: np.zeros_like(value) for name, value in params.items()}
     batches_per_epoch = math.ceil(len(train_snapshots) / TRACES_PER_BATCH)
     epochs = math.ceil(steps / batches_per_epoch) if steps else EPOCHS
     step = 0
@@ -204,7 +195,7 @@ def train(train_snapshots, train_labels, held_out_snapshots=None, held_out_label
             loss, gradients, _ = compute_loss_and_gradients(params, inputs, group_sizes, labels)
             losses.append(loss)
             step += 1
-            for name in trainable:
+            for name in params:
                 gradient = gradients[name] + WEIGHT_DECAY * params[name]
                 first_moment[name] = 0.9 * first_moment[name] + 0.1 * gradient
                 second_moment[name] = 0.999 * second_moment[name] + 0.001 * gradient**2
@@ -289,8 +280,8 @@ def make_fixture_weights(feature_count):
 
 
 def make_fine_tune_fixture(feature_count):
-    """Fine-tune the output layer of random weights on synthetic clicks, as the extension does, for
-    test/finetune.test.ts. Holds the batch orders train() drew, since TS can't reproduce numpy's generator."""
+    """Fine-tune random weights on synthetic clicks as the extension does, for test/finetune.test.ts. Holds the batch
+    orders train() drew, since TS can't reproduce numpy's generator."""
     traces = make_fixture_traces(FINE_TUNE_FIXTURE_CLICKS)
     traces[3]["clicked"] = -1  # a click on nothing
     rng = np.random.default_rng(3)
@@ -303,9 +294,8 @@ def make_fine_tune_fixture(feature_count):
     }
     mean = rng.normal(0, 1, feature_count)
     std = rng.uniform(0.5, 2, feature_count)
-    snapshots, times = zip(*(build_snapshots(trace) for trace in traces))
-    labels = [label_snapshots(trace, snapshot_times, 650) for trace, snapshot_times in zip(traces, times)]
-    fitted = train(list(snapshots), labels, start=(params, mean, std), trainable=OUTPUT_LAYER, steps=FINE_TUNE_FIXTURE_STEPS, learning_rate=FINE_TUNE_LEARNING_RATE)
+    snapshots, labels = zip(*(build_snapshots(trace, 650) for trace in traces))
+    fit = train(snapshots, labels, start=(params, mean, std), steps=FINE_TUNE_FIXTURE_STEPS, learning_rate=FINE_TUNE_LEARNING_RATE)
     # train() draws one permutation per epoch from default_rng(0) and nothing else when given a start.
     order_rng = np.random.default_rng(0)
     epochs = math.ceil(FINE_TUNE_FIXTURE_STEPS / math.ceil(len(traces) / TRACES_PER_BATCH))
@@ -314,7 +304,7 @@ def make_fine_tune_fixture(feature_count):
         "traces": traces,
         "orders": [order_rng.permutation(len(traces)).tolist() for _ in range(epochs)],
         "steps": FINE_TUNE_FIXTURE_STEPS,
-        "weights": export_weights(*fitted, 0, [], 650),
+        "weights": export_weights(*fit, 0, [], 650),
     }
 
 
@@ -356,7 +346,11 @@ def main():
         print("--default: training on none of them")
     held_out_people = []
     if args.adserp:
-        adserp_acquisitions = find_acquisitions(load_traces(args.adserp))
+        adserp_traces = load_traces(args.adserp)
+        # Older conversions included the pointerdown itself. Only earlier samples can predict it.
+        for trace in adserp_traces:
+            trace["samples"] = [sample for sample in trace["samples"] if sample[0] < 0]
+        adserp_acquisitions = find_acquisitions(adserp_traces)
         people = sorted({trace["person"] for trace in adserp_acquisitions})
         held_out_people = people[::5][:ADSERP_HELD_OUT_PEOPLE]  # every fifth person
         adserp_train = [trace for trace in adserp_acquisitions if trace["person"] not in held_out_people]
@@ -365,11 +359,9 @@ def main():
         held_out_traces += [trace for trace in adserp_acquisitions if trace["person"] in held_out_people]
         print(f"plus AdSERP: training on {len(adserp_train)} clicks ({repeats}x), holding out {len(held_out_people)} people")
 
-    train_snapshots, train_times = zip(*(build_snapshots(trace) for trace in train_traces))
-    held_out_snapshots, held_out_times = zip(*(build_snapshots(trace) for trace in held_out_traces))
-    train_labels = [label_snapshots(trace, times, args.within_ms) for trace, times in zip(train_traces, train_times)]
-    held_out_labels = [label_snapshots(trace, times, args.within_ms) for trace, times in zip(held_out_traces, held_out_times)]
-    params, mean, std = train(list(train_snapshots), train_labels, list(held_out_snapshots), held_out_labels)
+    train_snapshots, train_labels = zip(*(build_snapshots(trace, args.within_ms) for trace in train_traces))
+    held_out_snapshots, held_out_labels = zip(*(build_snapshots(trace, args.within_ms) for trace in held_out_traces))
+    params, mean, std = train(train_snapshots, train_labels, held_out_snapshots, held_out_labels)
 
     weights = export_weights(params, mean, std, trained_until, held_out_people, args.within_ms)
     out.write_text(json.dumps(weights) + "\n")

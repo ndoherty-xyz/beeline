@@ -1,7 +1,8 @@
 // Popup: the time prefetching saved, the prefetch switch for the current site and which weights are running; under
 // Advanced, the click counts, the overlay and export; and clear.
 
-import type { PersonalModel, TimeSaved } from "./background.ts";
+import { CLICKS_PER_UPDATE, currentPersonalModel, type PersonalModel } from "./personal-model.ts";
+import type { TimeSaved } from "./background.ts";
 
 const timeSavedText = document.getElementById("time-saved")!;
 const pagesSavedText = document.getElementById("pages-saved")!;
@@ -105,8 +106,9 @@ chrome.privacy.network.networkPredictionEnabled.onChange.addListener(showPreload
  */
 async function showModelStatus(): Promise<void> {
   const { personalModel } = (await chrome.storage.local.get("personalModel")) as { personalModel?: PersonalModel };
-  modelNameText.textContent = personalModel ? "Running your weights" : "Running default weights";
-  modelDetailText.textContent = personalModel ? "Fine-tuned on your clicks, on this device" : "Starts learning how you move after 100 clicks";
+  const model = currentPersonalModel(personalModel);
+  modelNameText.textContent = model ? "Running your weights" : "Running default weights";
+  modelDetailText.textContent = model ? "Fine-tuned on your clicks, on this device" : "Starts learning how you move after 100 clicks";
 }
 
 showModelStatus();
@@ -157,10 +159,11 @@ async function showClickCounts(): Promise<void> {
     newUsableClickCount?: number;
   };
   if (run !== clickCountsRun) return;
-  const remainingClicks = Math.max(0, 100 - newUsableClickCount);
+  const model = currentPersonalModel(personalModel);
+  const remainingClicks = Math.max(0, CLICKS_PER_UPDATE - newUsableClickCount);
   clickCountsText.textContent = [
     `${formatCount(traceKeys.length, "trace", "traces")} recorded, ${numberFormat.format(joinedOutcomeCount)} with ${joinedOutcomeCount === 1 ? "an outcome" : "outcomes"}`,
-    personalModel && `Last update learned from ${formatCount(personalModel.clickCount, "click", "clicks")}`,
+    model && `Last update learned from ${formatCount(model.clickCount, "click", "clicks")}`,
     remainingClicks === 0 ? "Next update is due" : `Next update after ${formatCount(remainingClicks, "more usable click", "more usable clicks")}`,
   ]
     .filter(Boolean)

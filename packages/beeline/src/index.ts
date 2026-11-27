@@ -8,7 +8,7 @@ import { TARGET_SELECTOR } from "./targets.ts";
 export type { ModelWeights, Rect, TimedPoint };
 export { TARGET_SELECTOR };
 export { prefetchLinks, type PrefetchOptions } from "./prefetch.ts";
-export { fineTuneOutputLayer, type FineTuneOptions } from "./finetune.ts";
+export { fineTune, type FineTuneOptions } from "./finetune.ts";
 export { selectTrainingClicks, type Trace } from "./traces.ts";
 
 export type BeelineOptions = {

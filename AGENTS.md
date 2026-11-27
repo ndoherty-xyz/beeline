@@ -1,7 +1,6 @@
 # Working in this repo
 
-Start with [docs/prd.md](docs/prd.md): the concept, the design, and the milestones in order. Then
-[docs/results.md](docs/results.md): what the recorded data looks like and the current numbers.
+Start with the [README](README.md) for the product, training schedule and benchmark results.
 
 `packages/extension/` is the Chrome extension, the product. `packages/beeline/` is its internal model and prefetch
 module (core API in `src/index.ts`, the model in `src/model.ts`, prefetching in `src/prefetch.ts`), imported as
@@ -66,7 +65,7 @@ the committed `packages/beeline/src/default-weights.json` unless given `weights`
 `npm run train -- data/<export>.jsonl --adserp data/adserp-traces.jsonl --default` rewrites it (the export only sets
 the held-out clicks, so `eval/finetune.ts` scores it on the same ones). `train/beeline_model.py` mirrors
 `packages/beeline/src/model.ts`; change both, then retrain so the fixture matches. `packages/beeline/src/finetune.ts`
-mirrors `train()` fine-tuning the output layer, and `test/finetune-fixture.json` (also written by train) checks it.
+mirrors `train()` fine-tuning every weight from a start, and `test/finetune-fixture.json` (also written by train) checks it.
 
 Public data: `npm run convert-adserp -- <unzipped AdSERP dir> data/adserp-traces.jsonl` turns the AdSERP dataset
 (Zenodo 15236546, CC BY 4.0) into traces from 47 other people, with a `person` field for holding people out. Download

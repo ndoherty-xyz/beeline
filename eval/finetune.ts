@@ -1,4 +1,4 @@
-// Scores weights files, such as those train/schedule.py writes, on the held-out clicks, one markdown row each.
+// Compare weights on held-out clicks from the user and AdSERP.
 // Usage: node eval/finetune.ts <traces.jsonl> <adserp-traces.jsonl> <weights.json>...
 
 import { readFileSync } from "node:fs";

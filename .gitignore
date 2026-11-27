@@ -5,6 +5,4 @@ dist/
 data/
 .venv/
 __pycache__/
-# Trained on personal cursor movement.
-packages/beeline/src/model-weights.json
 docs/

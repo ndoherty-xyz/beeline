@@ -1,20 +1,18 @@
-"""Train beeline's base model on recorded traces and export it for packages/beeline/src/model.ts.
+"""Train beeline's default model on AdSERP traces and export it for packages/beeline/src/model.ts.
 
-Usage: uv run --project train train/train.py data/traces-<date>.jsonl [--adserp data/adserp-traces.jsonl] [--default] [--within-ms 650] [--out weights.json]
+Usage: uv run --project train train/train.py data/adserp-traces.jsonl
 
-The model learns each target's chance of being clicked within --within-ms: a softmax over the targets plus a
-"no click by then" option, scored from the motion features alone. --adserp mixes in other people's traces from
-eval/helpers/convert-adserp.ts, holding out whole people. --default trains on AdSERP's people alone (the user's export still
-sets the held-out split) and writes packages/beeline/src/default-weights.json, the committed out-of-box model.
+The model learns each target's chance of being clicked within WITHIN_MS: a softmax over the targets plus a
+"no click by then" option, scored from the motion features alone. Traces come from eval/helpers/convert-adserp.ts;
+whole people are held out.
 
-Writes packages/beeline/src/model-weights.json (or --out) (gitignored: trained on personal movement), test/finetune-fixture.json
-(a whole-model fine-tune of random weights on synthetic clicks), and test/model-fixture.json: synthetic
-traces and random weights with the scores Python gives them, which test/model.test.ts checks the TS model
-reproduces.
+Writes packages/beeline/src/default-weights.json, test/finetune-fixture.json (a whole-model fine-tune of random
+weights on synthetic clicks), and test/model-fixture.json: synthetic traces and random weights with the scores Python
+gives them, which test/model.test.ts checks the TS model reproduces.
 """
 
-import argparse
 import json
+import sys
 import math
 from pathlib import Path
 
@@ -23,7 +21,6 @@ import numpy as np
 from beeline_model import MOTION_FEATURE_COUNT, compute_features, predict_probabilities, score_targets
 
 REPO = Path(__file__).resolve().parent.parent
-HELD_OUT_SHARE = 0.2
 SNAPSHOT_WINDOW_MS = 1000
 SNAPSHOT_STRIDE = 2  # every other sample: ~16 ms at 120 Hz
 HIDDEN_UNITS = 32
@@ -31,10 +28,8 @@ EPOCHS = 30
 TRACES_PER_BATCH = 32
 LEARNING_RATE = 3e-3
 WEIGHT_DECAY = 1e-4
-RETRY_GAP_MS = 1000
+WITHIN_MS = 650
 ADSERP_HELD_OUT_PEOPLE = 10
-# AdSERP is one layout (search results on one screen size), so it gets only twice the weight of its click count.
-ADSERP_REPEATS = 2
 FINE_TUNE_LEARNING_RATE = 1e-3
 # Two batches per pass, so the fixture covers a partial batch and stopping mid-pass.
 FINE_TUNE_FIXTURE_CLICKS = 34
@@ -68,26 +63,13 @@ def find_acquisitions(traces):
     return sorted(acquisitions, key=lambda trace: trace["time"])
 
 
-def find_empty_clicks_without_retry(traces):
-    """Return clicks on nothing with no target click in the second after (traces.ts findEmptyClicksWithoutRetry)."""
-    trace_by_id = {trace["id"]: trace for trace in traces if "id" in trace}
-    empty_clicks = []
-    for trace in traces:
-        if trace.get("version") != 2 or trace["clicked"] != -1 or trace["pointerCursor"] or not trace["samples"]:
-            continue
-        following = trace_by_id.get(f"{trace['page']}-{trace['seq'] + 1}")
-        if not following or following["clicked"] == -1 or following["time"] - trace["time"] > RETRY_GAP_MS:
-            empty_clicks.append(trace)
-    return empty_clicks
-
-
 def to_rects(targets):
     """Convert recorded [x, y, width, height] targets to an (N, 4) array of [left, top, right, bottom]."""
     targets = np.asarray(targets, dtype=np.float64).reshape(-1, 4)
     return np.hstack([targets[:, :2], targets[:, :2] + targets[:, 2:]])
 
 
-def build_snapshots(trace, within_ms):
+def build_snapshots(trace):
     """Return model inputs for every snapshot of one click, as an (S, N, features) float32 array, and their click labels."""
     samples = np.asarray(trace["samples"], dtype=np.float64)
     times, xs, ys = samples[:, 0], samples[:, 1], samples[:, 2]
@@ -95,7 +77,7 @@ def build_snapshots(trace, within_ms):
     # Counting back from the last sample, which is where the cursor rested at the click even if that was earlier.
     snapshot_indices = np.flatnonzero(times >= min(-SNAPSHOT_WINDOW_MS, times[-1]))[::-1][::SNAPSHOT_STRIDE][::-1]
     features = np.stack([compute_features(times, xs, ys, index, rects) for index in snapshot_indices]).astype(np.float32)
-    labels = np.where(times[snapshot_indices] >= -within_ms, trace["clicked"], -1)
+    labels = np.where(times[snapshot_indices] >= -WITHIN_MS, trace["clicked"], -1)
     return features, labels
 
 
@@ -215,17 +197,16 @@ def train(train_snapshots, train_labels, held_out_snapshots=None, held_out_label
 # Export ----------
 
 
-def export_weights(params, mean, std, trained_until, held_out_people, within_ms):
+def export_weights(params, mean, std, held_out_people):
     """Fold the standardisation into the hidden layer and none option and return weights in the packages/beeline/src/model.ts format."""
     hidden_weights = params["hidden_weights"] / std
     none_weights = params["none_weights"] / std[:MOTION_FEATURE_COUNT]
     return {
-        "trainedUntil": trained_until,
         "heldOutPeople": held_out_people,
         "hiddenWeights": hidden_weights.tolist(),
         "hiddenBiases": (params["hidden_biases"] - hidden_weights @ mean).tolist(),
         "outputWeights": params["output_weights"].tolist(),
-        "withinMs": within_ms,
+        "withinMs": WITHIN_MS,
         "noneWeights": none_weights.tolist(),
         "noneBias": float(params["none_bias"] - none_weights @ mean[:MOTION_FEATURE_COUNT]),
         "inputMean": mean.tolist(),
@@ -265,15 +246,14 @@ def make_fixture_traces(count=6):
 
 
 def make_fixture_weights(feature_count):
-    """Make random weights in the model-weights.json format, so the fixture reveals nothing about the trained ones."""
+    """Make random weights in the exported weights format, so the fixture depends on no trained model."""
     rng = np.random.default_rng(2)
     return {
-        "trainedUntil": 0,
         "heldOutPeople": [],
         "hiddenWeights": rng.normal(0, 1 / np.sqrt(feature_count), (HIDDEN_UNITS, feature_count)).tolist(),
         "hiddenBiases": rng.normal(0, 0.5, HIDDEN_UNITS).tolist(),
         "outputWeights": rng.normal(0, 1 / np.sqrt(HIDDEN_UNITS), HIDDEN_UNITS).tolist(),
-        "withinMs": 650,
+        "withinMs": WITHIN_MS,
         "noneWeights": rng.normal(0, 1, MOTION_FEATURE_COUNT).tolist(),
         "noneBias": float(rng.normal(0, 1)),
     }
@@ -294,17 +274,17 @@ def make_fine_tune_fixture(feature_count):
     }
     mean = rng.normal(0, 1, feature_count)
     std = rng.uniform(0.5, 2, feature_count)
-    snapshots, labels = zip(*(build_snapshots(trace, 650) for trace in traces))
+    snapshots, labels = zip(*(build_snapshots(trace) for trace in traces))
     fit = train(snapshots, labels, start=(params, mean, std), steps=FINE_TUNE_FIXTURE_STEPS, learning_rate=FINE_TUNE_LEARNING_RATE)
     # train() draws one permutation per epoch from default_rng(0) and nothing else when given a start.
     order_rng = np.random.default_rng(0)
     epochs = math.ceil(FINE_TUNE_FIXTURE_STEPS / math.ceil(len(traces) / TRACES_PER_BATCH))
     return {
-        "start": export_weights(params, mean, std, 0, [], 650),
+        "start": export_weights(params, mean, std, []),
         "traces": traces,
         "orders": [order_rng.permutation(len(traces)).tolist() for _ in range(epochs)],
         "steps": FINE_TUNE_FIXTURE_STEPS,
-        "weights": export_weights(*fit, 0, [], 650),
+        "weights": export_weights(*fit, []),
     }
 
 
@@ -318,52 +298,24 @@ def score_fixture_trace(weights, trace):
 
 
 def main():
-    """Train on the export given on the command line and write the weights and parity fixture."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("traces")
-    parser.add_argument("--adserp", help="also train on AdSERP traces, holding out whole people")
-    parser.add_argument("--default", action="store_true", help="train on --adserp alone, for packages/beeline/src/default-weights.json")
-    parser.add_argument("--within-ms", type=int, default=650, help="learn each target's chance of a click within this many ms")
-    parser.add_argument("--out", type=Path)
-    args = parser.parse_args()
-    if args.default and not args.adserp:
-        parser.error("--default needs --adserp")
-    out = args.out or REPO / f"packages/beeline/src/{'default' if args.default else 'model'}-weights.json"
+    """Train on the AdSERP traces given on the command line and write the default weights and parity fixtures."""
+    adserp_traces = load_traces(sys.argv[1])
+    # Older conversions included the pointerdown itself. Only earlier samples can predict it.
+    for trace in adserp_traces:
+        trace["samples"] = [sample for sample in trace["samples"] if sample[0] < 0]
+    acquisitions = find_acquisitions(adserp_traces)
+    people = sorted({trace["person"] for trace in acquisitions})
+    held_out_people = people[::5][:ADSERP_HELD_OUT_PEOPLE]  # every fifth person
+    train_traces = [trace for trace in acquisitions if trace["person"] not in held_out_people]
+    held_out_traces = [trace for trace in acquisitions if trace["person"] in held_out_people]
+    print(f"AdSERP: training on {len(train_traces)} clicks, holding out {len(held_out_traces)} from {len(held_out_people)} people")
 
-    traces = load_traces(args.traces)
-    acquisitions = find_acquisitions(traces)
-    split = round(len(acquisitions) * (1 - HELD_OUT_SHARE))
-    train_traces, held_out_traces = acquisitions[:split], acquisitions[split:]
-    trained_until = train_traces[-1]["time"]
-    print(f"{len(acquisitions)} clicks: training on {len(train_traces)}, holding out the newest {len(held_out_traces)}")
-    # Clicks on nothing are the only windows where no target is about to be clicked.
-    empty_clicks = find_empty_clicks_without_retry(traces)
-    train_traces += [trace for trace in empty_clicks if trace["time"] <= trained_until]
-    held_out_traces += [trace for trace in empty_clicks if trace["time"] > trained_until]
-    print(f"plus {len(empty_clicks)} clicks on nothing, split at the same time")
-    if args.default:
-        train_traces = []
-        print("--default: training on none of them")
-    held_out_people = []
-    if args.adserp:
-        adserp_traces = load_traces(args.adserp)
-        # Older conversions included the pointerdown itself. Only earlier samples can predict it.
-        for trace in adserp_traces:
-            trace["samples"] = [sample for sample in trace["samples"] if sample[0] < 0]
-        adserp_acquisitions = find_acquisitions(adserp_traces)
-        people = sorted({trace["person"] for trace in adserp_acquisitions})
-        held_out_people = people[::5][:ADSERP_HELD_OUT_PEOPLE]  # every fifth person
-        adserp_train = [trace for trace in adserp_acquisitions if trace["person"] not in held_out_people]
-        repeats = 1 if args.default else ADSERP_REPEATS
-        train_traces += adserp_train * repeats
-        held_out_traces += [trace for trace in adserp_acquisitions if trace["person"] in held_out_people]
-        print(f"plus AdSERP: training on {len(adserp_train)} clicks ({repeats}x), holding out {len(held_out_people)} people")
-
-    train_snapshots, train_labels = zip(*(build_snapshots(trace, args.within_ms) for trace in train_traces))
-    held_out_snapshots, held_out_labels = zip(*(build_snapshots(trace, args.within_ms) for trace in held_out_traces))
+    train_snapshots, train_labels = zip(*(build_snapshots(trace) for trace in train_traces))
+    held_out_snapshots, held_out_labels = zip(*(build_snapshots(trace) for trace in held_out_traces))
     params, mean, std = train(train_snapshots, train_labels, held_out_snapshots, held_out_labels)
 
-    weights = export_weights(params, mean, std, trained_until, held_out_people, args.within_ms)
+    weights = export_weights(params, mean, std, held_out_people)
+    out = REPO / "packages/beeline/src/default-weights.json"
     out.write_text(json.dumps(weights) + "\n")
     fixture_weights = make_fixture_weights(len(weights["hiddenWeights"][0]))
     fixture_traces = make_fixture_traces()

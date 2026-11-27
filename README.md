@@ -72,8 +72,7 @@ See [PRIVACY.md](PRIVACY.md).
 - `eval/`: replays exported traces through the model and the baselines.
 - `train/`: trains the model (Python, needs [uv](https://docs.astral.sh/uv/)).
 
-`npm run watch` rebuilds on each change. `npm run playground` is a test page for the core that you can use without
-reloading the extension.
+`npm run watch` rebuilds on each change.
 
 Checks:
 
@@ -83,8 +82,8 @@ npm run build
 npm test
 ```
 
-`npm run eval -- data/<export>.jsonl` runs the benchmark. `npm run train -- data/<export>.jsonl`
-trains on one. See [AGENTS.md](AGENTS.md) for training and data details.
+`npm run eval -- data/<export>.jsonl` runs the benchmark. `npm run train -- data/adserp-traces.jsonl`
+retrains the default weights. See [AGENTS.md](AGENTS.md) for training and data details.
 
 The Foresight baseline is ported from Foresight.js 4.3.0 (MIT). The default weights are trained on the AdSERP dataset
 (Zenodo 15236546, CC BY 4.0).

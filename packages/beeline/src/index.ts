@@ -1,5 +1,5 @@
 // beeline: each element's chance of being clicked within the next moment (the weights' `withinMs`), from how the
-// cursor is moving. While anything is watched, it collects every visible target, keeps the last second of cursor
+// cursor is moving. While a frame callback is added, it collects every visible target, keeps the last second of cursor
 // samples, and runs the model once per animation frame while the cursor moves.
 
 import { predictTargetProbabilities, type ModelWeights, type Rect, type TimedPoint } from "./model.ts";
@@ -7,15 +7,11 @@ import { TARGET_SELECTOR } from "./targets.ts";
 
 export type { ModelWeights, Rect, TimedPoint };
 export { TARGET_SELECTOR };
-export { prefetchLinks, type PrefetchOptions } from "./prefetch.ts";
-export { fineTune, type FineTuneOptions } from "./finetune.ts";
+export { prefetchLinks } from "./prefetch.ts";
+export { fineTune } from "./finetune.ts";
 export { selectTrainingClicks, type Trace } from "./traces.ts";
 
 export type BeelineOptions = {
-  /** Which elements count as targets. The model compares every target with the others, so this should cover all clickable elements. */
-  targets?: string;
-  /** The custom property written on watched elements with their probability, or false for none. */
-  cssVariable?: string | false;
   /** Weights to run instead of the bundled default, which is trained on other people (AdSERP), such as weights fitted to this user. */
   weights?: ModelWeights;
 };
@@ -23,18 +19,15 @@ export type BeelineOptions = {
 /** One frame of predictions: every visible target, its rectangle and its probability, at the same indexes. */
 export type BeelineFrame = { targetElements: Element[]; targetRects: DOMRect[]; probabilities: number[]; history: TimedPoint[] };
 
-/** Called with the element's probability whenever it changes. */
-export type ProbabilityCallback = (probability: number) => void;
-
 const SAMPLE_WINDOW_MS = 1000;
 
 /**
- * Function to set up beeline. Nothing is tracked, and the model isn't loaded, until an element is watched, and
+ * Function to set up beeline. Nothing is tracked, and the model isn't loaded, until a frame callback is added, and
  * nothing ever is during server-side rendering or on touch-only devices, where there's no cursor to follow.
- * @param options Which elements count as targets, the CSS variable to write, and the weights to run.
- * @returns Functions to watch elements, read the targets, and stop.
+ * @param options The weights to run.
+ * @returns Functions to follow frames, read the targets, and stop.
  */
-export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beeline-p", weights }: BeelineOptions = {}) {
+export function createBeeline({ weights }: BeelineOptions = {}) {
   const canTrack = typeof window !== "undefined" && matchMedia("(any-pointer: fine)").matches;
 
   // Targets ----------
@@ -46,8 +39,7 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
   let targetRectsStale = true;
 
   /**
-   * Function to re-measure the visible targets, if they may have moved. Watched elements count even when the
-   * selector misses them.
+   * Function to re-measure the visible targets, if they may have moved.
    * @returns The visible targets and their rectangles.
    */
   function measureTargets(): { targetElements: Element[]; targetRects: DOMRect[] } {
@@ -57,8 +49,7 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
       targetRects = [];
       // While a modal dialog is open, the page behind it can't be clicked.
       const clickableRoot = document.querySelector("dialog:modal") ?? document.documentElement;
-      const unmatchedWatched = [...watchedElements.keys()].filter((element) => !element.matches(targets) && clickableRoot.contains(element));
-      for (const element of [...clickableRoot.querySelectorAll(targets), ...unmatchedWatched]) {
+      for (const element of clickableRoot.querySelectorAll(TARGET_SELECTOR)) {
         const rect = element.getBoundingClientRect();
         const onScreen = rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
         if (onScreen && rect.width > 0 && rect.height > 0) {
@@ -70,76 +61,9 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
     return { targetElements, targetRects };
   }
 
-  // Watchers ----------
+  // Frames ----------
 
-  const watchedElements = new Map<Element, { probability: number; watchers: Set<{ callback?: ProbabilityCallback }> }>();
   const frameCallbacks = new Set<(frame: BeelineFrame) => void>();
-
-  /**
-   * Function to update each watched element whose probability changed: its CSS variable, then its callbacks.
-   * @param probabilityOf The probability of a given element.
-   * @returns Nothing.
-   */
-  function notifyWatchers(probabilityOf: (element: Element) => number): void {
-    for (const [element, watched] of watchedElements) {
-      const probability = probabilityOf(element);
-      if (probability === watched.probability) continue;
-      watched.probability = probability;
-      if (cssVariable) (element as HTMLElement).style?.setProperty(cssVariable, probability.toFixed(3));
-      for (const { callback } of watched.watchers) callback?.(probability);
-    }
-  }
-
-  /**
-   * Function to follow an element's probability of being clicked: written to its CSS variable, and passed to
-   * `callback` whenever it changes.
-   * @param element The element to watch.
-   * @param callback Called with the probability, between 0 and 1. Leave it out to only set the CSS variable.
-   * @returns A function that stops watching.
-   */
-  function watch(element: Element, callback?: ProbabilityCallback): () => void {
-    const watcher = { callback };
-    if (!watchedElements.has(element)) {
-      watchedElements.set(element, { probability: 0, watchers: new Set() });
-      targetRectsStale = true;
-    }
-    watchedElements.get(element)!.watchers.add(watcher);
-    startTracking();
-    return () => {
-      const watched = watchedElements.get(element);
-      if (!watched?.watchers.delete(watcher) || watched.watchers.size > 0) return;
-      watchedElements.delete(element);
-      if (cssVariable) (element as HTMLElement).style?.removeProperty(cssVariable);
-      stopTrackingIfIdle();
-    };
-  }
-
-  /**
-   * Function to run `enter` when the element's probability rises to `above`, and `leave` when it falls below `below`.
-   * A lower `below` stops the actions flickering while the probability hovers around one number.
-   * @param element The element to watch.
-   * @param thresholds `above` to enter, and `below` to leave (default: `above`).
-   * @param actions What to run on entering and leaving; with `once`, stop watching after the first enter.
-   * @returns A function that stops watching.
-   */
-  function when(
-    element: Element,
-    { above, below = above }: { above: number; below?: number },
-    { enter, leave, once = false }: { enter?: () => void; leave?: () => void; once?: boolean },
-  ): () => void {
-    let entered = false;
-    const stopWatching = watch(element, (probability) => {
-      if (!entered && probability >= above) {
-        entered = true;
-        enter?.();
-        if (once) stopWatching();
-      } else if (entered && probability < below) {
-        entered = false;
-        leave?.();
-      }
-    });
-    return stopWatching;
-  }
 
   /**
    * Function to call `callback` with every target's probability on each frame the model runs.
@@ -167,7 +91,7 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
   let mutationObserver: MutationObserver | undefined;
 
   /**
-   * Function to run the model on the samples since the last scroll, and pass the result to watchers and frame callbacks.
+   * Function to run the model on the samples since the last scroll, and pass the result to the frame callbacks.
    * @returns Nothing.
    */
   function runModelFrame(): void {
@@ -178,8 +102,6 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
     const { targetElements, targetRects } = measureTargets();
     if (targetRects.length === 0) return;
     const probabilities = predictTargetProbabilities(weights, history, targetRects);
-    const indexByElement = new Map(targetElements.map((element, index) => [element, index]));
-    notifyWatchers((element) => probabilities[indexByElement.get(element) ?? -1] ?? 0);
     for (const callback of frameCallbacks) callback({ targetElements, targetRects, probabilities, history });
   }
 
@@ -191,7 +113,7 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
     if (listening || !canTrack) return;
     listening = new AbortController();
     const listenerOptions = { capture: true, passive: true, signal: listening.signal };
-    // Loaded the first time tracking starts, so pages that never watch anything don't download it.
+    // Loaded the first time tracking starts, so pages that never add a frame callback don't download it.
     if (!weights) import("./default-weights.json").then((module) => (weights = module.default as ModelWeights));
     targetRectsStale = true;
     mutationObserver = new MutationObserver(() => (targetRectsStale = true));
@@ -216,18 +138,17 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
       (event) => {
         lastScrollTime = event.timeStamp;
         targetRectsStale = true;
-        notifyWatchers(() => 0);
       },
       listenerOptions,
     );
   }
 
   /**
-   * Function to stop listening once nothing is watched.
+   * Function to stop listening once no frame callback is left.
    * @returns Nothing.
    */
   function stopTrackingIfIdle(): void {
-    if (!listening || watchedElements.size > 0 || frameCallbacks.size > 0) return;
+    if (!listening || frameCallbacks.size > 0) return;
     listening.abort();
     listening = undefined;
     mutationObserver!.disconnect();
@@ -237,17 +158,13 @@ export function createBeeline({ targets = TARGET_SELECTOR, cssVariable = "--beel
   }
 
   return {
-    watch,
-    when,
     onFrame,
     measureTargets,
     /**
-     * Function to stop tracking and drop every watcher.
+     * Function to stop tracking and drop every frame callback.
      * @returns Nothing.
      */
     destroy(): void {
-      if (cssVariable) for (const element of watchedElements.keys()) (element as HTMLElement).style?.removeProperty(cssVariable);
-      watchedElements.clear();
       frameCallbacks.clear();
       stopTrackingIfIdle();
     },

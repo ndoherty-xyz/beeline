@@ -3,17 +3,10 @@
 import { createBeeline } from "./index.ts";
 import type { ModelWeights } from "./model.ts";
 
+// The probability of a click within the next moment that prefetches a link.
 export const PREFETCH_THRESHOLD = 0.22;
+// How long the cursor rests on a link before it's prefetched anyway.
 export const HOVER_MS = 100;
-
-export type PrefetchOptions = {
-  /** The probability of a click within the next moment that prefetches a link (default 0.22). */
-  prefetchAbove?: number;
-  /** How long the cursor rests on a link before it's prefetched anyway, in ms. */
-  hoverMs?: number;
-  /** Weights to run instead of the bundled default, as in `createBeeline`. */
-  weights?: ModelWeights;
-};
 
 // Links already prefetched on this page, kept across restarts with new weights.
 const prefetchedUrls = new Set<string>();
@@ -67,21 +60,21 @@ function prefetchUrl(url: string): void {
 /**
  * Function to prefetch each same-origin link once, when beeline expects it to be clicked, the cursor rests on it, it
  * gets keyboard focus, or a touch starts on it. Covers links added later too.
- * @param options The threshold, the hover floor and the weights.
+ * @param options Weights to run instead of the bundled default, as in `createBeeline`.
  * @returns A function that stops.
  */
-export function prefetchLinks({ prefetchAbove = PREFETCH_THRESHOLD, hoverMs = HOVER_MS, weights }: PrefetchOptions = {}): () => void {
+export function prefetchLinks({ weights }: { weights?: ModelWeights } = {}): () => void {
   const prefetchOnce = (link: HTMLAnchorElement) => {
     if (prefetchedUrls.has(link.href) || !isPrefetchable(link)) return;
     prefetchedUrls.add(link.href);
     prefetchUrl(link.href);
   };
 
-  const beeline = createBeeline({ cssVariable: false, weights });
+  const beeline = createBeeline({ weights });
   beeline.onFrame(({ targetElements, probabilities }) => {
     probabilities.forEach((probability, index) => {
       const link = targetElements[index];
-      if (link instanceof HTMLAnchorElement && probability >= prefetchAbove) prefetchOnce(link);
+      if (link instanceof HTMLAnchorElement && probability >= PREFETCH_THRESHOLD) prefetchOnce(link);
     });
   });
 
@@ -116,7 +109,7 @@ export function prefetchLinks({ prefetchAbove = PREFETCH_THRESHOLD, hoverMs = HO
       const link = closestLink(event);
       if (event.pointerType !== "mouse" || !link) return;
       clearTimeout(hoverTimer);
-      hoverTimer = window.setTimeout(() => prefetchOnce(link), hoverMs);
+      hoverTimer = window.setTimeout(() => prefetchOnce(link), HOVER_MS);
     },
     listenerOptions,
   );

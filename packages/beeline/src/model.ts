@@ -11,8 +11,6 @@ export type Rect = { left: number; top: number; right: number; bottom: number };
 
 /** Trained weights, as exported by train/train.py. Feature standardisation is folded into the hidden layer. */
 export type ModelWeights = {
-  /** Time of the newest of the recorder's own traces in the training set; only later ones are held out. */
-  trainedUntil: number;
   /** People in other datasets (a trace's `person`) whose traces were all held out. */
   heldOutPeople: string[];
   /** One row of input weights per hidden unit. */

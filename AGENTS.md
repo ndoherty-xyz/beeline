@@ -58,14 +58,13 @@ npm test
 
 Tests use `node --test`; Node 22.18+ runs `.ts` tests directly.
 
-Training is Python (numpy, managed by uv in `train/`): `npm run train -- data/<export>.jsonl` rewrites
-`packages/beeline/src/model-weights.json` (gitignored: it's fitted to personal movement, never commit it) and
-`test/model-fixture.json` (random weights, so the parity test needs no trained model) together. `createBeeline` runs
-the committed `packages/beeline/src/default-weights.json` unless given `weights`; it's trained on AdSERP alone, and
-`npm run train -- data/<export>.jsonl --adserp data/adserp-traces.jsonl --default` rewrites it (the export only sets
-the held-out split for offline comparisons). `train/beeline_model.py` mirrors
-`packages/beeline/src/model.ts`; change both, then retrain so the fixture matches. `packages/beeline/src/finetune.ts`
-mirrors `train()` fine-tuning every weight from a start, and `test/finetune-fixture.json` (also written by train) checks it.
+Training is Python (numpy, managed by uv in `train/`): `npm run train -- data/adserp-traces.jsonl` rewrites the
+committed `packages/beeline/src/default-weights.json` (trained on AdSERP alone, holding out whole people),
+`test/model-fixture.json` (random weights, so the parity test needs no trained model) and
+`test/finetune-fixture.json` together. `createBeeline` runs the default weights unless given `weights`.
+`train/beeline_model.py` mirrors `packages/beeline/src/model.ts`; change both, then retrain so the fixture matches.
+`packages/beeline/src/finetune.ts` mirrors `train()` fine-tuning every weight from a start, which the fine-tune fixture
+checks.
 
 Public data: `npm run convert-adserp -- <unzipped AdSERP dir> data/adserp-traces.jsonl` turns the AdSERP dataset
 (Zenodo 15236546, CC BY 4.0) into traces from 47 other people, with a `person` field for holding people out. Download

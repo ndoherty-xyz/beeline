@@ -22,7 +22,6 @@ const holdout = traces.filter(trace => trace.version === 2 && trace.time > cutof
 for (const trace of holdout) trace.samples = samplesSinceLastScroll(trace).sort((a, b) => a[0] - b[0]);
 
 const weights: ModelWeights = weightsPath ? JSON.parse(readFileSync(weightsPath, "utf8")) : fineTune(defaultWeights, training);
-if (weightsPath && weights.trainedUntil > cutoff) throw new Error("Supplied weights overlap the held-out period.");
 const policies: Policy[] = ["Hover", "Beeline + hover", "Foresight + hover"];
 const results = policies.map(policy => ({ policy, ...scorePolicy(holdout, policy, weights) }));
 const foresightUnused = results.find(row => row.policy === "Foresight + hover")!.unused;

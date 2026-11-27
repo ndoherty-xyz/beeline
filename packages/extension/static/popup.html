@@ -4,145 +4,217 @@
     <meta charset="utf-8" />
     <title>beeline</title>
     <style>
+      @font-face {
+        font-family: "Valley Sans";
+        src: url(fonts/valley-sans.woff2) format("woff2");
+        font-weight: 400 700;
+      }
       :root {
         color-scheme: light dark;
         --background: #fff;
-        --foreground: #000;
-        --muted: #666;
-        --line: #e5e5e5;
+        --foreground: #1b1a17;
+        --muted: #6b6860;
+        --line: #ebe8e1;
         --track: #949494;
+        --surface: #f6f4ef;
         --accent: #ffc900;
+        --ink: #1b1a17;
         --danger: #d92d20;
+        /* 4px base: xs 4, sm 8, md 12, base 16, lg 24 */
+        --space-xs: 4px;
+        --space-sm: 8px;
+        --space-md: 12px;
+        --space-base: 16px;
+        --space-lg: 24px;
+        --radius-sm: 8px;
+        --radius-md: 14px;
+        --radius-lg: 20px;
         --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+        --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b6860' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --background: #000;
-          --foreground: #fff;
-          --muted: #a3a3a3;
-          --line: #2e2e2e;
+          --background: #111110;
+          --foreground: #f5f3ee;
+          --muted: #a3a09a;
+          --line: #36342f;
           --track: #6b6b6b;
+          --surface: #26241f;
           --danger: #ff6b5b;
+          --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a3a09a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
         }
       }
       * { box-sizing: border-box; }
-      body { width: 280px; margin: 0; padding: 14px 12px 12px; background: var(--background); color: var(--foreground); font: 13px/1.35 system-ui, sans-serif; }
-      header { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; font-size: 15px; font-weight: 600; }
-      header img { width: 24px; height: 24px; }
-      .time-saved { padding: 6px 12px 18px; text-align: center; }
-      .time-saved > span { display: block; }
-      .time-saved .label { color: var(--muted); font-size: 12px; }
-      #time-saved { font-size: 36px; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-      #pages-saved { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-      .notice { margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 10%, var(--background)); }
-      .notice .title { font-weight: 600; }
-      .card { border: 1px solid var(--line); border-radius: 10px; }
-      .row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
-      .row + .row { border-top: 1px solid var(--line); }
-      .row > span { flex: 1; min-width: 0; }
-      .title, .site { display: block; }
-      .site { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; text-wrap: pretty; }
+      html { scrollbar-width: none; }
+      body {
+        width: 320px; margin: 0; padding: var(--space-base); background: var(--background); color: var(--foreground);
+        font: 13px/1.4 "Valley Sans", system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+      }
+      body > * + * { margin-top: var(--space-md); }
       :focus-visible { outline: 2px solid var(--foreground); outline-offset: 2px; }
+
+      /* Header and on/off */
+      #prefetch-toggle {
+        display: flex; align-items: center; gap: var(--space-md); width: 100%; padding: var(--space-md) var(--space-base) var(--space-md) var(--space-md);
+        height: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--background); text-align: left;
+      }
+      #prefetch-toggle img { width: 28px; height: 28px; flex: none; border-radius: var(--radius-sm); }
+      .status-label { flex: 1; min-width: 0; }
+      .status-label strong { display: block; font-weight: 600; }
+      #prefetch-site { display: block; min-height: 15px; color: var(--muted); font-size: 12px; line-height: 1.23; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .status-state { flex: none; display: flex; align-items: center; gap: var(--space-sm); color: var(--muted); font-weight: 600; }
+      .status-state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--track); }
+      #prefetch-toggle:not([aria-checked]) .status-state { visibility: hidden; }
+      #prefetch-toggle[aria-checked="true"] .status-state { color: var(--foreground); }
+      #prefetch-toggle[aria-checked="true"] .dot { background: var(--accent); }
+      /* Transitions start once the stored state is shown, so opening the popup doesn't animate it in. */
+      body.ready .status-state { transition: color 160ms var(--ease-out); }
+      body.ready .status-state .dot { transition: background-color 160ms var(--ease-out); }
+
+      /* Time saved */
+      .time-saved {
+        padding: var(--space-lg) var(--space-base) var(--space-base); border-radius: var(--radius-lg); color: var(--ink); text-align: center;
+        background: var(--accent);
+      }
+      .time-saved .label { display: block; font-size: 12px; font-weight: 500; opacity: 0.7; }
+      #time-saved { display: block; margin-top: var(--space-xs); font-size: 36px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+      .chart { position: relative; display: flex; align-items: flex-end; gap: 6px; height: 80px; margin-top: var(--space-lg); }
+      .bar { position: relative; flex: 1; min-height: 6px; border-radius: var(--radius-sm); background: rgb(255 255 255 / 0.45); }
+      .bar.empty { height: 6px; background: none; border: 1px dashed rgb(27 26 23 / 0.2); }
+      .average { position: absolute; left: 0; right: 0; border-top: 2px dotted var(--ink); pointer-events: none; }
+      .chart-legend { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); margin-top: var(--space-md); font-size: 12px; font-weight: 600; white-space: nowrap; }
+      #chart-average { display: flex; align-items: center; gap: 6px; color: var(--ink); font-variant-numeric: tabular-nums; }
+      #chart-average::before { content: ""; width: 16px; border-top: 2px dotted var(--ink); }
+      #chart-caption { opacity: 0.75; }
+      #chart-average[hidden] { display: none; }
+      #chart-average[hidden] + #chart-caption { margin: 0 auto; }
+
+      .notice { padding: var(--space-md) var(--space-base); border-radius: var(--radius-md); background: color-mix(in srgb, var(--danger) 10%, var(--background)); }
+      .notice .title { font-weight: 600; }
+      .card { border: 1px solid var(--line); border-radius: var(--radius-md); }
+      #model-card { padding: var(--space-md) var(--space-base); }
+      .progress { height: 4px; margin-top: var(--space-sm); border-radius: 2px; background: var(--line); overflow: hidden; }
+      .progress > div { height: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; }
+      body.ready .progress > div { transition: transform 240ms var(--ease-out); }
+      .title { display: block; font-weight: 500; }
+      .sub { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.23; text-wrap: pretty; }
 
       /* Switches */
       input[type="checkbox"] {
         appearance: none; flex: none; position: relative; width: 32px; height: 18px; margin: 0;
-        border-radius: 9px; background: var(--track); cursor: pointer; transition: background-color 160ms ease;
+        border-radius: 9px; background: var(--track); cursor: pointer;
       }
       input[type="checkbox"]::after {
         content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
-        background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.3); transition: transform 160ms var(--ease-out);
+        background: #fff;
       }
       input[type="checkbox"]:checked { background: var(--accent); }
-      input[type="checkbox"]:checked::after { background: #000; transform: translateX(14px); }
-      input[type="checkbox"]:disabled { opacity: 0.4; cursor: default; }
+      input[type="checkbox"]:checked::after { transform: translateX(14px); }
+      body.ready input[type="checkbox"] { transition: background-color 160ms var(--ease-out); }
+      body.ready input[type="checkbox"]::after { transition: transform 160ms var(--ease-out); }
 
       /* Advanced */
-      details { margin-top: 12px; padding: 0 12px; color: var(--muted); font-size: 12px; }
-      summary { cursor: pointer; padding: 8px 0; }
-      #click-counts { margin: 4px 0 8px; white-space: pre-line; font-variant-numeric: tabular-nums; }
-      .setting { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; color: var(--foreground); }
-      .setting > select, .control { width: 11.5em; }
-      .control { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
-      fieldset { border: none; margin: 0; padding: 0 0 0 12px; border-left: 1px solid var(--line); }
-      fieldset:disabled { opacity: 0.4; pointer-events: none; }
+      details { color: var(--muted); font-size: 12px; line-height: 1.23; }
+      summary {
+        display: flex; align-items: center; justify-content: space-between; padding: var(--space-md) var(--space-base);
+        border-radius: var(--radius-md); color: var(--foreground); font-weight: 500; cursor: pointer; list-style: none;
+        transition: background-color 150ms ease;
+      }
+      summary::-webkit-details-marker { display: none; }
+      summary::after {
+        content: ""; width: 6px; height: 6px; margin-right: 2px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0;
+        transform: translateY(-2px) rotate(45deg); transition: transform 160ms var(--ease-out);
+      }
+      details[open] summary::after { transform: translateY(2px) rotate(-135deg); }
+      .advanced-body { padding: 0 var(--space-base) var(--space-base); }
+      details[open] .advanced-body { animation: advanced-in 150ms var(--ease-out); }
+      @keyframes advanced-in { from { opacity: 0; } }
+      .setting {
+        display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); min-height: 32px;
+        margin: var(--space-sm) 0; color: var(--foreground); transition: opacity 160ms var(--ease-out);
+      }
+      .setting:has(:disabled) { opacity: 0.4; }
+      .setting > select, .control { width: 12.5em; }
+      .control { position: relative; display: flex; justify-content: flex-end; }
+      .control::after { content: "%"; position: absolute; top: 50%; right: 10px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+      fieldset { border: none; margin: 0; padding: 0; }
+      fieldset:disabled { pointer-events: none; }
       select, input[type="number"], button {
-        font: inherit; color: var(--foreground); background: var(--background);
-        border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px;
+        height: 32px; font: inherit; color: var(--foreground); background: var(--background);
+        border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 10px;
       }
-      #overlay-threshold { width: 4.5em; text-align: right; }
-      #overlay-threshold:disabled { opacity: 0.4; }
-      button { cursor: pointer; padding: 4px 10px; transition: transform 160ms var(--ease-out), background-color 150ms ease; }
+      select {
+        appearance: none; padding-right: 28px; cursor: pointer;
+        background: var(--background) var(--chevron) no-repeat right 10px center / 10px 6px;
+      }
+      #overlay-threshold { width: 5.5em; padding-right: 24px; text-align: right; }
+      #overlay-threshold::-webkit-inner-spin-button { appearance: none; }
+      button { cursor: pointer; font-weight: 500; transition: transform 160ms var(--ease-out), background-color 150ms ease; }
       button:disabled { opacity: 0.4; cursor: default; }
-      button:not(:disabled):active { transform: scale(0.97); }
-      @media (hover: hover) {
-        button:not(:disabled):hover, select:hover { background: color-mix(in srgb, var(--foreground) 5%, var(--background)); }
+      button:not(:disabled):active { transform: scale(0.97); transition-duration: 80ms; }
+      #prefetch-toggle:not(:disabled):active { transform: scale(0.98); }
+      @media (hover: hover) and (pointer: fine) {
+        button:not(:disabled):hover, #prefetch-toggle:not(:disabled):hover, summary:hover { background-color: var(--surface); }
+        select:hover { background-color: var(--surface); }
       }
-      #export { margin-top: 4px; }
+      #export { width: 100%; margin-top: var(--space-sm); }
 
-      footer { display: flex; justify-content: flex-end; margin-top: 12px; padding: 0 12px; }
-      #clear { border: none; padding: 4px 0; background: none; color: var(--muted); text-align: right; }
-      #clear.confirming { color: var(--danger); font-weight: 500; }
-      @media (hover: hover) {
-        #clear:hover { background: none; color: var(--danger); }
+      #clear { width: 100%; margin-top: var(--space-sm); border: none; background: none; color: var(--danger); }
+      #clear.confirming { background: color-mix(in srgb, var(--danger) 10%, var(--background)); font-weight: 600; }
+      @media (hover: hover) and (pointer: fine) {
+        #clear:hover { background: color-mix(in srgb, var(--danger) 10%, var(--background)); }
       }
       @media (prefers-reduced-motion: reduce) {
-        * { transition-duration: 0.01ms !important; }
+        * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
       }
     </style>
   </head>
   <body>
-    <header><img src="icons/icon-48.png" alt="" /> beeline</header>
+    <button id="prefetch-toggle" role="switch" disabled>
+      <img src="icons/icon-48.png" alt="" />
+      <span class="status-label"><strong>Beeline</strong><span id="prefetch-site"></span></span>
+      <span class="status-state"><span class="dot"></span><span id="prefetch-state"></span></span>
+    </button>
     <section class="time-saved">
       <span class="label">Time saved</span>
       <span id="time-saved">0 ms</span>
-      <span id="pages-saved">0 pages</span>
+      <div class="chart" id="recent-chart" aria-hidden="true"></div>
+      <div class="chart-legend"><span id="chart-average" hidden></span><span id="chart-caption">Last 10 pages</span></div>
     </section>
     <section class="notice" id="preloading-notice" hidden>
       <span class="title">Chrome's page preloading is off</span>
       <span class="sub" id="preloading-detail"></span>
     </section>
-    <section class="card">
-      <label class="row">
-        <span>
-          <span class="title" id="prefetch-title">Prefetch on</span>
-          <span class="site" id="prefetch-site"></span>
-          <span class="sub" id="prefetch-detail">Loads links as your cursor heads for them</span>
-        </span>
-        <input type="checkbox" role="switch" id="prefetch" disabled aria-labelledby="prefetch-title prefetch-site" aria-describedby="prefetch-detail" />
-      </label>
-      <div class="row">
-        <span>
-          <span class="title" id="model-name">Running default weights</span>
-          <span class="sub" id="model-detail">Starts learning how you move after 100 clicks</span>
-        </span>
-      </div>
+    <section class="card" id="model-card" hidden>
+      <span class="title" id="model-name"></span>
+      <span class="sub" id="model-detail"></span>
+      <div class="progress" id="model-progress" hidden><div></div></div>
     </section>
-    <details>
+    <details class="card">
       <summary>Advanced</summary>
-      <p id="click-counts">Loading…</p>
-      <label class="setting">Show predictions <input type="checkbox" role="switch" id="overlay" /></label>
-      <fieldset id="overlay-options" disabled>
-        <label class="setting">
-          Predictor
-          <select id="overlay-predictor">
-            <option value="model">Model</option>
-            <option value="foresight">Foresight</option>
-          </select>
-        </label>
-        <label class="setting">
-          Show
-          <select id="overlay-targets">
-            <option value="firing">Firing targets only</option>
-            <option value="all">All targets</option>
-          </select>
-        </label>
-        <label class="setting">Fire at <span class="control"><input type="number" id="overlay-threshold" min="1" max="99" step="1" /> %</span></label>
-      </fieldset>
-      <button id="export" disabled>Export traces</button>
+      <div class="advanced-body">
+        <label class="setting">Show predictions <input type="checkbox" role="switch" id="overlay" /></label>
+        <fieldset id="overlay-options" disabled>
+          <label class="setting">
+            Predictor
+            <select id="overlay-predictor">
+              <option value="model">Model</option>
+              <option value="foresight">Foresight</option>
+            </select>
+          </label>
+          <label class="setting">
+            Targets
+            <select id="overlay-targets">
+              <option value="firing">Firing targets only</option>
+              <option value="all">All targets</option>
+            </select>
+          </label>
+          <label class="setting">Fire at <span class="control"><input type="number" id="overlay-threshold" min="1" max="99" step="1" /></span></label>
+        </fieldset>
+        <button id="export" disabled>Export traces</button>
+        <button id="clear" aria-live="polite">Reset beeline</button>
+      </div>
     </details>
-    <footer><button id="clear">Clear data</button></footer>
     <script src="popup.js"></script>
   </body>
 </html>

@@ -13,7 +13,7 @@ beeline keeps everything on your device.
 - **What it sends:** nothing. beeline has no server and makes no requests of its own.
 - **Prefetches** are ordinary requests to the site you're on, for pages on the same origin, the same as a click would
   make a moment later. They go only to that site.
-- **Clear**, in the popup, deletes every stored click, the fine-tuned weights and the time saved. Removing the extension deletes
+- **Reset beeline**, under Advanced in the popup, deletes every stored click, the fine-tuned weights and the time saved. Removing the extension deletes
   everything, settings included.
 
 Exported traces are files you save yourself; beeline doesn't send them anywhere.

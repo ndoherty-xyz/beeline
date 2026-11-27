@@ -56,11 +56,11 @@ Everything stays in `chrome.storage.local` in your browser. Nothing is sent anyw
 - `training:` records: clicks from versions before 0.1.0 made while recording was off, kept for fine-tuning only. They are never exported.
 - `personalModel`: your fine-tuned weights.
 - `timeSaved`: the time prefetching saved. For each prefetched page you open, that's how long its prefetch took to its
-  first response byte, minus what the page still waited after the click. The background times prefetches through
+  first response byte, minus what the page still waited after the click, totalled and kept for the last 10 pages. The background times prefetches through
   `webRequest`, holding them in memory only.
 - Settings, and the sites with prefetching off.
 
-**Clear** in the popup deletes every click record, your fine-tuned weights and the time saved, so the default weights run again.
+**Reset beeline**, under **Advanced** in the popup, deletes every click record, your fine-tuned weights and the time saved, so the default weights run again.
 
 Traces are geometry only: cursor positions and target rectangles. They contain no URLs, page text or element contents.
 See [PRIVACY.md](PRIVACY.md).

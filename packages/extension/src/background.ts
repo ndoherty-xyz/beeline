@@ -4,8 +4,8 @@ import { fineTune, selectTrainingClicks, type ModelWeights, type Trace } from "b
 import defaultWeights from "beeline/default-weights.json" with { type: "json" };
 import { CLICKS_PER_UPDATE, type PersonalModel } from "./personal-model.ts";
 
-/** The time prefetching saved, and over how many pages. */
-export type TimeSaved = { savedMs: number; pageCount: number };
+/** The time prefetching saved, over how many pages, and on each of the last 10 pages (oldest first). */
+export type TimeSaved = { savedMs: number; pageCount: number; recentSavedMs?: number[] };
 
 /** How long a prefetched page still waited for its server after the click, sent by the content script. */
 export type PrefetchedPageWait = { waitMs: number };
@@ -97,8 +97,9 @@ async function addTimeSaved({ waitMs }: PrefetchedPageWait, prefetchKey: string)
   if (prefetchMs === undefined) return;
   prefetchDurations.delete(prefetchKey);
   const { timeSaved = { savedMs: 0, pageCount: 0 } } = (await chrome.storage.local.get("timeSaved")) as { timeSaved?: TimeSaved };
-  const savedMs = timeSaved.savedMs + Math.max(0, prefetchMs - waitMs);
-  await chrome.storage.local.set({ timeSaved: { savedMs, pageCount: timeSaved.pageCount + 1 } });
+  const pageSavedMs = Math.max(0, prefetchMs - waitMs);
+  const recentSavedMs = [...(timeSaved.recentSavedMs ?? []), pageSavedMs].slice(-10);
+  await chrome.storage.local.set({ timeSaved: { savedMs: timeSaved.savedMs + pageSavedMs, pageCount: timeSaved.pageCount + 1, recentSavedMs } });
 }
 
 chrome.runtime.onMessage.addListener((pageWait: PrefetchedPageWait, sender) => {

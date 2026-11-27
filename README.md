@@ -36,13 +36,15 @@ To compare the model with [Foresight](https://foresightjs.com), turn on **Show p
 
 After the first 100 usable clicks, Beeline anticipated **94 of 117** same-origin navigations on 126 later pages from one trackpad user. It left **51%** as many prefetches unused as Foresight.
 
-| Policy | Estimated waiting saved per navigation | Unused prefetches |
+| Policy | Estimated wait saved per navigation | Unused prefetches (% of Foresight) |
 |---|---:|---:|
-| 100 ms hover alone | 176 ms | 123 |
-| Beeline + hover | 276 ms | 357 |
-| Foresight + hover | 290 ms | 701 |
+| Hover | 176 ms | 123 (18%) |
+| Beeline + hover | 276 ms | 357 (51%) |
+| Foresight + hover | 290 ms | 701 (100%) |
 
-The replay uses recorded click windows, assumes a 400 ms fetch, and counts one prefetch per destination per page. Run `node eval/policy.ts data/traces-2026-11-24.jsonl` with the original local export to reproduce it.
+Run `npm run eval -- data/<export>.jsonl` to score all three policies. The table above uses `data/traces-2026-11-24.jsonl`. By default, the benchmark fine-tunes the bundled weights on the first 100 usable clicks. It scores later v2 click windows after the 80% split of clicks where the cursor moved onto a target, excluding pages used for fine-tuning. To compare an already-fitted candidate on the same windows, pass its weights JSON as the second argument. Train the candidate only on data outside those test pages.
+
+Choose the model that saves the most wait while leaving at most 70% as many prefetches unused as Foresight. Each same-origin navigation gets up to 400 ms credit for prefetch lead time, with zero for a miss. Each destination counts once per page. An unused prefetch has no matching later navigation in the recorded windows.
 
 On the test MacBook, scoring 200 targets took about **0.14 ms per frame** in Node. The first whole-model update took **7.1–7.2 seconds** in a Chromium worker.
 
@@ -81,7 +83,7 @@ npm run build
 npm test
 ```
 
-`npm run eval -- data/<export>.jsonl` scores the predictors on an export, and `npm run train -- data/<export>.jsonl`
+`npm run eval -- data/<export>.jsonl` runs the benchmark. `npm run train -- data/<export>.jsonl`
 trains on one. See [AGENTS.md](AGENTS.md) for training and data details.
 
 The Foresight baseline is ported from Foresight.js 4.3.0 (MIT). The default weights are trained on the AdSERP dataset

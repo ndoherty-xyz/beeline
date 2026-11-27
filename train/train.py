@@ -4,7 +4,7 @@ Usage: uv run --project train train/train.py data/traces-<date>.jsonl [--adserp 
 
 The model learns each target's chance of being clicked within --within-ms: a softmax over the targets plus a
 "no click by then" option, scored from the motion features alone. --adserp mixes in other people's traces from
-eval/convert-adserp.ts, holding out whole people. --default trains on AdSERP's people alone (the user's export still
+eval/helpers/convert-adserp.ts, holding out whole people. --default trains on AdSERP's people alone (the user's export still
 sets the held-out split) and writes packages/beeline/src/default-weights.json, the committed out-of-box model.
 
 Writes packages/beeline/src/model-weights.json (or --out) (gitignored: trained on personal movement), test/finetune-fixture.json
@@ -45,7 +45,7 @@ FINE_TUNE_FIXTURE_STEPS = 21
 
 
 def load_traces(path):
-    """Load every trace, keeping only the samples after the last scroll (eval/replay.ts samplesSinceLastScroll), sorted."""
+    """Load every trace, keeping only the samples after the last scroll (traces.ts samplesSinceLastScroll), sorted."""
     traces = []
     for line in Path(path).read_text().splitlines():
         trace = json.loads(line)
@@ -56,7 +56,7 @@ def load_traces(path):
 
 
 def find_acquisitions(traces):
-    """Return the clicks where the cursor moved onto the clicked target (eval/replay.ts isAcquisition), oldest first."""
+    """Return the clicks where the cursor moved onto the clicked target (traces.ts isAcquisition), oldest first."""
     acquisitions = []
     for trace in traces:
         if trace["clicked"] == -1 or not trace["samples"]:
@@ -69,7 +69,7 @@ def find_acquisitions(traces):
 
 
 def find_empty_clicks_without_retry(traces):
-    """Return clicks on nothing with no target click in the second after (eval/replay.ts findEmptyClicksWithoutRetry)."""
+    """Return clicks on nothing with no target click in the second after (traces.ts findEmptyClicksWithoutRetry)."""
     trace_by_id = {trace["id"]: trace for trace in traces if "id" in trace}
     empty_clicks = []
     for trace in traces:

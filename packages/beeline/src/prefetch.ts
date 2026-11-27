@@ -4,6 +4,7 @@ import { createBeeline } from "./index.ts";
 import type { ModelWeights } from "./model.ts";
 
 export const PREFETCH_THRESHOLD = 0.22;
+export const HOVER_MS = 100;
 
 export type PrefetchOptions = {
   /** The probability of a click within the next moment that prefetches a link (default 0.22). */
@@ -69,7 +70,7 @@ function prefetchUrl(url: string): void {
  * @param options The threshold, the hover floor and the weights.
  * @returns A function that stops.
  */
-export function prefetchLinks({ prefetchAbove = PREFETCH_THRESHOLD, hoverMs = 100, weights }: PrefetchOptions = {}): () => void {
+export function prefetchLinks({ prefetchAbove = PREFETCH_THRESHOLD, hoverMs = HOVER_MS, weights }: PrefetchOptions = {}): () => void {
   const prefetchOnce = (link: HTMLAnchorElement) => {
     if (prefetchedUrls.has(link.href) || !isPrefetchable(link)) return;
     prefetchedUrls.add(link.href);

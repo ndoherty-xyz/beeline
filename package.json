@@ -9,10 +9,9 @@
     "playground": "esbuild packages/beeline/playground/playground.ts --bundle --outdir=packages/beeline/playground/dist --servedir=packages/beeline/playground --serve=localhost:8123",
     "typecheck": "tsc && tsc -p packages/beeline",
     "test": "node --test test/*.test.ts",
-    "eval": "node eval/report.ts",
-    "near-misses": "node eval/near-misses.ts",
+    "eval": "node eval/run.ts",
     "train": "uv run --project train train/train.py",
-    "convert-adserp": "node eval/convert-adserp.ts"
+    "convert-adserp": "node eval/helpers/convert-adserp.ts"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.7",
